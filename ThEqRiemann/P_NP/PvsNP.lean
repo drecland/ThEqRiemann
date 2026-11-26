@@ -2142,27 +2142,19 @@ noncomputable def mkCanonicalExtractor
 ----------------------------------------------------------------------
 
 structure Verrou1_PolyTimeTrace where
-  /-- Algorithme effectif calculant la m-ième somme de Newton modulo p -/
   computeTrace : (n p m : ℕ) → (F : InstanceSATPlus 2) → CostM (ZMod p)
-  /-- Polynôme bornant le coût du calcul d'une trace -/
   poly_bound : Polynomial ℕ
-  /-- Le coût est polynomial en la taille de l'instance + m + p -/
   cost_le_poly : ∀ (n p m : ℕ) (F : InstanceSATPlus 2),
     (computeTrace n p m F).cost ≤ poly_bound.eval (inputSizeSATPlus 2 n F + m + p)
-  /-- Correction : la valeur calculée est bien la trace de M_m_SAT_mod (= newtonSumMod) -/
   spec : ∀ (n p m : ℕ) (F : InstanceSATPlus 2),
     (computeTrace n p m F).val = newtonSumMod 2 n p F m
 
 structure Verrou2_PolyTimeLocalRoots where
-  /-- Borne polynomiale sur le nombre de racines / le degré utilisé -/
   degreeBound : ℕ → InstanceSATPlus 2 → ℕ
-  /-- Algorithme qui, à partir d'un oracle de traces (Verrou 1),
-      renvoie une liste de racines candidates dans ZMod p -/
   extractLocalRoots :
     (n p : ℕ) → (F : InstanceSATPlus 2) →
     (traceOracle : ℕ → CostM (ZMod p)) →
     CostM (List (ZMod p))
-  /-- Borne polynomiale sur le coût -/
   poly_bound : Polynomial ℕ
   cost_le_poly : ∀ (n p : ℕ) (F : InstanceSATPlus 2) (oracle : ℕ → CostM (ZMod p)),
     (extractLocalRoots n p F oracle).cost ≤ poly_bound.eval (inputSizeSATPlus 2 n F + p)
@@ -2173,24 +2165,18 @@ structure Verrou2_PolyTimeLocalRoots where
       ((k : ℕ) : ZMod p) ∈ (extractLocalRoots n p F oracle).val
 
 structure Verrou3_PolyTimeCRTRecombination where
-  /-- Algorithme de recombinaison (Garner / CRT) prenant
-  les listes de résidus pour p_0, ..., p_{n-1} -/
   recombine :
     (n : ℕ) → (F : InstanceSATPlus 2) →
     (localRoots : (i : Fin n) → List (ZMod (canonicalPrimes n i))) →
     CostM (Option (Fin (2 ^ n)))
-  /-- Borne polynomiale sur le coût -/
   poly_bound : Polynomial ℕ
   cost_le_poly : ∀ (n : ℕ) (F : InstanceSATPlus 2)
   (localRoots : (i : Fin n) → List (ZMod (canonicalPrimes n i))),
     (recombine n F localRoots).cost ≤ poly_bound.eval (inputSizeSATPlus 2 n F)
-  /-- Correction (Soundness) : si l'algorithme renvoie `some k`, alors k satisfait F -/
   soundness : ∀ (n : ℕ) (F : InstanceSATPlus 2)
   (localRoots : (i : Fin n) → List (ZMod (canonicalPrimes n i)))
     (k : Fin (2 ^ n)),
     (recombine n F localRoots).val = some k → evalSATPlus 2 n F k = true
-  /-- Complétude : s'il existe une solution k dont les résidus mod p_i sont dans `localRoots i`,
-      alors l'algorithme trouve une solution -/
   completeness : ∀ (n : ℕ) (F : InstanceSATPlus 2)
   (localRoots : (i : Fin n) → List (ZMod (canonicalPrimes n i))),
     (∃ k : Fin (2 ^ n), evalSATPlus 2 n F k = true ∧
