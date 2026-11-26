@@ -2258,7 +2258,140 @@ theorem newtonSumMod_eq_sum_blocks_add_rem
     simp only [Finset.mem_filter] at hx1 hx2
     omega
 
+noncomputable def solBlockFinset (Q n : ℕ) (F : InstanceSATPlus Q)
+    (start len : ℕ) : Finset (Fin (Q ^ n)) :=
+  (solFinset Q n F).filter
+    (fun k : Fin (Q ^ n) => start ≤ (k : ℕ) ∧ (k : ℕ) < start + len)
 
+noncomputable def blockMatrixMod (Q n p : ℕ) (F : InstanceSATPlus Q)
+    (m start len : ℕ) (h_bound : start + len ≤ Q ^ n) :
+    Matrix (Fin len) (Fin len) (ZMod p) :=
+  Matrix.diagonal (fun i : Fin len =>
+    let k : Fin (Q ^ n) := ⟨start + i.val, by omega⟩
+    if evalSATPlus Q n F k = true then ((k : ℕ) : ZMod p) ^ m else 0)
+
+theorem trace_blockMatrixMod_eq_blockNewtonSumMod
+    (Q n p : ℕ) (F : InstanceSATPlus Q) (m start len : ℕ)
+    (h_bound : start + len ≤ Q ^ n) :
+    Matrix.trace (blockMatrixMod Q n p F m start len h_bound) =
+      blockNewtonSumMod Q n p F m start len := by
+  unfold blockMatrixMod blockNewtonSumMod
+  rw [Matrix.trace_diagonal]
+  rw [← Finset.sum_filter]
+  apply Finset.sum_bij (fun (i : Fin len) _ => (⟨start + i.val, by omega⟩ : Fin (Q ^ n)))
+  · intro i hi
+    simp only [Finset.mem_filter, Finset.mem_univ, true_and] at hi ⊢
+    refine ⟨?_, ?_, ?_⟩
+    · simp only [solFinset, Finset.mem_filter, Finset.mem_univ, true_and]
+      exact hi
+    · omega
+    · omega
+  · intro i₁ _ i₂ _ h_eq
+    have h_val : start + i₁.val = start + i₂.val := congrArg Fin.val h_eq
+    exact Fin.ext (by omega)
+  · intro k hk
+    simp only [solFinset, Finset.mem_filter, Finset.mem_univ, true_and] at hk
+    refine ⟨⟨k.val - start, by omega⟩, ?_, ?_⟩
+    · simp only [Finset.mem_filter, Finset.mem_univ, true_and]
+      have h_eq : (⟨start + (k.val - start), by omega⟩ : Fin (Q ^ n)) = k := by
+        exact Fin.ext (by simp; omega)
+      rw [h_eq]
+      exact hk.1
+    · exact Fin.ext (by simp; omega)
+  · intro i _
+    rfl
+
+theorem blockNewtonSumMod_split
+    (Q n p : ℕ) (F : InstanceSATPlus Q) (m start len₁ len₂ : ℕ) :
+    blockNewtonSumMod Q n p F m start (len₁ + len₂) =
+      blockNewtonSumMod Q n p F m start len₁ +
+      blockNewtonSumMod Q n p F m (start + len₁) len₂ := by
+  unfold blockNewtonSumMod
+  have h_union :
+      (solFinset Q n F).filter (fun k : Fin (Q ^ n) =>
+        start ≤ (k : ℕ) ∧ (k : ℕ) < start + (len₁ + len₂)) =
+      (solFinset Q n F).filter (fun k : Fin (Q ^ n) => start ≤ (k : ℕ) ∧ (k : ℕ) < start + len₁) ∪
+      (solFinset Q n F).filter (fun k : Fin (Q ^ n) =>
+        start + len₁ ≤ (k : ℕ) ∧ (k : ℕ) < start + len₁ + len₂) := by
+    ext k
+    simp only [Finset.mem_filter, Finset.mem_union]
+    constructor
+    · rintro ⟨hk, h1, h2⟩
+      by_cases h_lt : (k : ℕ) < start + len₁
+      · left; exact ⟨hk, h1, h_lt⟩
+      · right; exact ⟨hk, by omega, by omega⟩
+    · rintro (⟨hk, h1, h2⟩ | ⟨hk, h1, h2⟩)
+      · exact ⟨hk, h1, by omega⟩
+      · exact ⟨hk, by omega, by omega⟩
+  have h_disj :
+      Disjoint
+        ((solFinset Q n F).filter (fun k : Fin (Q ^ n) => start ≤ (k : ℕ) ∧ (k : ℕ) < start + len₁))
+        ((solFinset Q n F).filter (fun k : Fin (Q ^ n) =>
+          start + len₁ ≤ (k : ℕ) ∧ (k : ℕ) < start + len₁ + len₂)) := by
+    rw [Finset.disjoint_filter]
+    intro k _ h1 h2
+    omega
+  rw [h_union, Finset.sum_union h_disj]
+
+theorem trace_blockMatrixMod_split
+    (Q n p : ℕ) (F : InstanceSATPlus Q) (m start len₁ len₂ : ℕ)
+    (h_bound : start + (len₁ + len₂) ≤ Q ^ n) :
+    Matrix.trace (blockMatrixMod Q n p F m start (len₁ + len₂) h_bound) =
+      Matrix.trace (blockMatrixMod Q n p F m start len₁ (by omega)) +
+      Matrix.trace (blockMatrixMod Q n p F m (start + len₁) len₂ (by omega)) := by
+  rw [trace_blockMatrixMod_eq_blockNewtonSumMod,
+      trace_blockMatrixMod_eq_blockNewtonSumMod,
+      trace_blockMatrixMod_eq_blockNewtonSumMod]
+  exact blockNewtonSumMod_split Q n p F m start len₁ len₂
+
+noncomputable def T_reduced_mod (Q n p : ℕ) (F : InstanceSATPlus Q) :
+    Matrix { k : Fin (Q ^ n) // k ∈ solFinset Q n F }
+           { k : Fin (Q ^ n) // k ∈ solFinset Q n F } (ZMod p) :=
+  Matrix.diagonal (fun k => ((k.1 : ℕ) : ZMod p))
+
+theorem trace_M_m_eq_trace_T_reduced_pow
+    (Q n p : ℕ) (F : InstanceSATPlus Q) (m : ℕ) :
+    Matrix.trace (M_m_SAT_mod Q n p F m) =
+      Matrix.trace ((T_reduced_mod Q n p F) ^ m) := by
+  rw [trace_eq_newtonSumMod]
+  unfold T_reduced_mod newtonSumMod
+  rw [Matrix.diagonal_pow, Matrix.trace_diagonal]
+  exact (Finset.sum_coe_sort (solFinset Q n F) (fun k => ((k : ℕ) :
+    ZMod p) ^ m)).symm
+
+noncomputable def T_block_reduced_mod (Q n p : ℕ) (F : InstanceSATPlus Q)
+    (start len : ℕ) :
+    Matrix { k : Fin (Q ^ n) // k ∈ solBlockFinset Q n F start len }
+           { k : Fin (Q ^ n) // k ∈ solBlockFinset Q n F start len } (ZMod p) :=
+  Matrix.diagonal (fun k => ((k.1 : ℕ) : ZMod p))
+
+
+theorem blockNewtonSumMod_eq_trace_T_block_reduced_pow
+    (Q n p : ℕ) (F : InstanceSATPlus Q) (m start len : ℕ) :
+    blockNewtonSumMod Q n p F m start len =
+      Matrix.trace ((T_block_reduced_mod Q n p F start len) ^ m) := by
+  unfold T_block_reduced_mod blockNewtonSumMod solBlockFinset
+  rw [Matrix.diagonal_pow, Matrix.trace_diagonal]
+  exact (Finset.sum_coe_sort
+    ((solFinset Q n F).filter (fun k : Fin (Q ^ n) => start ≤ (k : ℕ) ∧ (k : ℕ) < start + len))
+    (fun k => ((k : ℕ) : ZMod p) ^ m)).symm
+
+theorem trace_M_m_eq_sum_block_reduced_traces
+    (Q n p : ℕ) (F : InstanceSATPlus Q) (m B : ℕ) (hB : 0 < B) :
+    Matrix.trace (M_m_SAT_mod Q n p F m) =
+      (∑ b ∈ Finset.range (Q ^ n / B),
+        Matrix.trace ((T_block_reduced_mod Q n p F (b * B) B) ^ m)) +
+      Matrix.trace ((T_block_reduced_mod Q n p F
+        ((Q ^ n / B) * B) (Q ^ n % B)) ^ m) := by
+  rw [trace_eq_newtonSumMod]
+  rw [newtonSumMod_eq_sum_blocks_add_rem Q n p F m B hB]
+  congr 1
+  · apply Finset.sum_congr rfl
+    intro b _
+    exact blockNewtonSumMod_eq_trace_T_block_reduced_pow
+      Q n p F m (b * B) B
+  · exact blockNewtonSumMod_eq_trace_T_block_reduced_pow
+      Q n p F m ((Q ^ n / B) * B) (Q ^ n % B)
 
 
 
