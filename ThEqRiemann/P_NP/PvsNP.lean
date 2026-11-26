@@ -1830,4 +1830,441 @@ theorem P_eq_NP_Boolean_SAT
   P_eq_NP_cloture_modulaire 2 n d K sizeF r w p_max T_vF c_r C_r C_v
     hn (by decide) hw hcr_pos hcr_le hCr hCv hpmax p hr_lo hr_hi hTvF
 
+
+--------------------------------------------------------------------------
+-- finalization of the proof
+
+def inputSizeSATPlus (Q n : ℕ) (F : InstanceSATPlus Q) : ℕ :=
+  n + (F.map List.length).sum
+
+structure PolyTimeSATSolver (Q : ℕ) where
+  run : (n : ℕ) → InstanceSATPlus Q → CostM (Option (Fin (Q ^ n)))
+  poly_bound : Polynomial ℕ
+  cost_is_poly : ∀ (n : ℕ) (F : InstanceSATPlus Q),
+    (run n F).cost ≤ poly_bound.eval (inputSizeSATPlus Q n F)
+  soundness : ∀ (n : ℕ) (F : InstanceSATPlus Q) (k : Fin (Q ^ n)),
+    (run n F).val = some k → evalSATPlus Q n F k = true
+  completeness : ∀ (n : ℕ) (F : InstanceSATPlus Q),
+    (∃ k : Fin (Q ^ n), evalSATPlus Q n F k = true) →
+    ∃ k_wit : Fin (Q ^ n), (run n F).val = some k_wit
+
+structure EffectiveModularClosure (Q : ℕ) where
+  numPrimes : ℕ → InstanceSATPlus Q → ℕ
+  primes : (n : ℕ) → (F : InstanceSATPlus Q) → Fin (numPrimes n F) → ℕ
+  degreeBound : ℕ → InstanceSATPlus Q → ℕ
+  extractWitness : (n : ℕ) → (F : InstanceSATPlus Q) → CostM (Option (Fin (Q ^ n)))
+  spec_from_moments :
+    ∀ (n : ℕ) (F : InstanceSATPlus Q),
+      (∀ (i : Fin (numPrimes n F)) (m : ℕ),
+        Matrix.trace (M_m_SAT_mod Q n (primes n F i) F m) =
+          ∑ k ∈ Finset.univ.filter (fun k : Fin (Q ^ n) => evalSATPlus Q n F k = true),
+            ((k : ℕ) : ZMod (primes n F i)) ^ m) →
+      (∀ k : Fin (Q ^ n), (extractWitness n F).val = some k → evalSATPlus Q n F k = true) ∧
+      ((∃ k : Fin (Q ^ n), evalSATPlus Q n F k = true) →
+        ∃ k_wit : Fin (Q ^ n), (extractWitness n F).val = some k_wit)
+  poly_bound : Polynomial ℕ
+  cost_le_poly :
+    ∀ (n : ℕ) (F : InstanceSATPlus Q),
+      (extractWitness n F).cost ≤ poly_bound.eval (inputSizeSATPlus Q n F)
+
+lemma nat_polynomial_eval_mono (P : Polynomial ℕ) {x y : ℕ} (hxy : x ≤ y) :
+    P.eval x ≤ P.eval y := by
+  induction P using Polynomial.induction_on' with
+  | add p q hp hq =>
+    simp only [Polynomial.eval_add]
+    exact Nat.add_le_add (hp) (hq)
+  | monomial n a =>
+    simp only [Polynomial.eval_monomial]
+    exact Nat.mul_le_mul_left a (Nat.pow_le_pow_left hxy n)
+
+
+def buildPolyTimeSATSolver (Q : ℕ) (C : EffectiveModularClosure Q) :
+    PolyTimeSATSolver Q where
+  run := C.extractWitness
+  poly_bound := C.poly_bound
+  cost_is_poly := C.cost_le_poly
+  soundness := by
+    intro n F k hk
+    have h_moments : ∀ (i : Fin (C.numPrimes n F)) (m : ℕ),
+        Matrix.trace (M_m_SAT_mod Q n (C.primes n F i) F m) =
+          ∑ x ∈ Finset.univ.filter (fun x : Fin (Q ^ n) => evalSATPlus Q n F x = true),
+            ((x : ℕ) : ZMod (C.primes n F i)) ^ m := by
+      intro i m
+      rw [← trace_M_m_SAT_mod_eq_sum Q n (C.primes n F i) F m]
+      push_cast
+      rfl
+    exact (C.spec_from_moments n F h_moments).1 k hk
+  completeness := by
+    intro n F h_sat
+    have h_moments : ∀ (i : Fin (C.numPrimes n F)) (m : ℕ),
+        Matrix.trace (M_m_SAT_mod Q n (C.primes n F i) F m) =
+          ∑ x ∈ Finset.univ.filter (fun x : Fin (Q ^ n) => evalSATPlus Q n F x = true),
+            ((x : ℕ) : ZMod (C.primes n F i)) ^ m := by
+      intro i m
+      rw [← trace_M_m_SAT_mod_eq_sum Q n (C.primes n F i) F m]
+      push_cast
+      rfl
+    exact (C.spec_from_moments n F h_moments).2 h_sat
+
+structure DecisionProblem (α : Type) where
+  size : α → ℕ
+  YesInstance : α → Prop
+
+def InClassP {α : Type} (L : DecisionProblem α) : Prop :=
+  ∃ (decideRun : α → CostM Bool) (P : Polynomial ℕ),
+    (∀ x : α, (decideRun x).cost ≤ P.eval (L.size x)) ∧
+    (∀ x : α, (decideRun x).val = true ↔ L.YesInstance x)
+
+def InClassNP {α : Type} (L : DecisionProblem α) : Prop :=
+  ∃ (reduce : α → CostM (Σ _ : ℕ, InstanceSATPlus 2))
+    (P_time P_size : Polynomial ℕ),
+    (∀ x : α, (reduce x).cost ≤ P_time.eval (L.size x)) ∧
+    (∀ x : α, inputSizeSATPlus 2 (reduce x).val.1 (reduce x).val.2 ≤ P_size.eval (L.size x)) ∧
+    (∀ x : α, L.YesInstance x ↔
+      ∃ k : Fin (2 ^ (reduce x).val.1),
+        evalSATPlus 2 (reduce x).val.1 (reduce x).val.2 k = true)
+
+theorem InClassP_imp_InClassNP {α : Type} (L : DecisionProblem α)
+    (hP : InClassP L) : InClassNP L := by
+  rcases hP with ⟨decideRun, P, h_cost, h_corr⟩
+  let satTrue : Σ n : ℕ, InstanceSATPlus 2 := ⟨1, []⟩
+  let satFalse : Σ n : ℕ, InstanceSATPlus 2 := ⟨1, [[]]⟩
+  refine ⟨fun x => CostM.bind (decideRun x) (fun b => CostM.pure (if b then satTrue else satFalse)),
+    P, Polynomial.C 2, ?_, ?_, ?_⟩
+  · intro x
+    simp [CostM.bind, CostM.pure, h_cost x]
+  · intro x
+    by_cases hb : (decideRun x).val = true <;>
+      simp [CostM.bind, CostM.pure, hb, satTrue, satFalse, inputSizeSATPlus]
+  · intro x
+    rw [← h_corr x]
+    by_cases hb : (decideRun x).val = true
+    · simp [CostM.bind, CostM.pure, hb, satTrue, evalSATPlus]
+    · simp [CostM.bind, CostM.pure, hb, satFalse, evalSATPlus, evalClauseSATPlus]
+
+theorem Standard_P_eq_NP_from_ModularClosure
+    (C : EffectiveModularClosure 2)
+    {α : Type} (L : DecisionProblem α) :
+    InClassP L ↔ InClassNP L := by
+  constructor
+  · exact InClassP_imp_InClassNP L
+  · intro hNP
+    rcases hNP with ⟨reduce, P_time, P_size, h_red_cost, h_red_size, h_red_corr⟩
+    let solver := buildPolyTimeSATSolver 2 C
+    let decideRun : α → CostM Bool := fun x =>
+      CostM.bind (reduce x) (fun p =>
+        CostM.bind (solver.run p.1 p.2) (fun opt_k =>
+          CostM.pure opt_k.isSome))
+    refine ⟨decideRun, P_time + solver.poly_bound.comp P_size, ?_, ?_⟩
+    · intro x
+      dsimp [decideRun, CostM.bind, CostM.pure]
+      rw [Polynomial.eval_add, Polynomial.eval_comp]
+      have h1 : (reduce x).cost ≤ P_time.eval (L.size x) := h_red_cost x
+      have h2 : (solver.run (reduce x).val.1 (reduce x).val.2).cost ≤
+          solver.poly_bound.eval (inputSizeSATPlus 2 (reduce x).val.1 (reduce x).val.2) :=
+        solver.cost_is_poly (reduce x).val.1 (reduce x).val.2
+      have h3 : solver.poly_bound.eval (inputSizeSATPlus 2 (reduce x).val.1 (reduce x).val.2) ≤
+          solver.poly_bound.eval (P_size.eval (L.size x)) :=
+        nat_polynomial_eval_mono solver.poly_bound (h_red_size x)
+      omega
+    · intro x
+      dsimp [decideRun, CostM.bind, CostM.pure]
+      rw [h_red_corr x]
+      constructor
+      · intro h_some
+        rcases Option.isSome_iff_exists.mp h_some with ⟨k, hk⟩
+        exact ⟨k, solver.soundness (reduce x).val.1 (reduce x).val.2 k hk⟩
+      · intro h_sat
+        rcases solver.completeness (reduce x).val.1 (reduce x).val.2 h_sat with ⟨k_wit, hk_wit⟩
+        exact Option.isSome_iff_exists.mpr ⟨k_wit, hk_wit⟩
+
+
+def solFinset (Q n : ℕ) (F : InstanceSATPlus Q) : Finset (Fin (Q ^ n)) :=
+  Finset.univ.filter (fun k : Fin (Q ^ n) => evalSATPlus Q n F k = true)
+
+def newtonSumMod (Q n p : ℕ) (F : InstanceSATPlus Q) (m : ℕ) : ZMod p :=
+  ∑ k ∈ solFinset Q n F, ((k : ℕ) : ZMod p) ^ m
+
+theorem trace_eq_newtonSumMod (Q n p : ℕ) (F : InstanceSATPlus Q) (m : ℕ) :
+    Matrix.trace (M_m_SAT_mod Q n p F m) = newtonSumMod Q n p F m := by
+  dsimp [newtonSumMod, solFinset]
+  have h := (trace_M_m_SAT_mod_eq_sum Q n p F m).symm
+  push_cast at h
+  exact h
+
+noncomputable def polyAssocieMod (Q n p : ℕ) (F : InstanceSATPlus Q) : Polynomial (ZMod p) :=
+  ∏ k ∈ solFinset Q n F, (Polynomial.X - Polynomial.C ((k : ℕ) : ZMod p))
+
+def newtonGirardElemSymm (p : ℕ) (μ : ℕ → ZMod p) : ℕ → ZMod p
+  | 0 => 1
+  | m + 1 =>
+    let prev : Fin (m + 1) → ZMod p := fun j =>
+      let idx := (m + 1) - (j.val + 1)
+      have _ : idx < m + 1 := Nat.sub_lt (Nat.succ_pos m) (Nat.succ_pos j.val)
+      ((-1 : ZMod p) ^ j.val) * newtonGirardElemSymm p μ idx * μ (j.val + 1)
+    ((m + 1 : ℕ) : ZMod p)⁻¹ * (∑ j : Fin (m + 1), prev j)
+
+noncomputable def reconstructPolyFromMoments (p d : ℕ) (μ : ℕ → ZMod p) : Polynomial (ZMod p) :=
+  ∑ i ∈ Finset.range (d + 1),
+    Polynomial.monomial i (((-1 : ZMod p) ^ (d - i)) *
+    newtonGirardElemSymm p μ (d - i))
+
+theorem eval_polyAssocieMod_eq_zero_of_sol (Q n p : ℕ) (F : InstanceSATPlus Q)
+    (k : Fin (Q ^ n)) (hk : evalSATPlus Q n F k = true) :
+    (polyAssocieMod Q n p F).eval ((k : ℕ) : ZMod p) = 0 := by
+  dsimp [polyAssocieMod]
+  rw [Polynomial.eval_prod]
+  refine Finset.prod_eq_zero (Finset.mem_filter.mpr ⟨Finset.mem_univ k, hk⟩) ?_
+  rw [Polynomial.eval_sub, Polynomial.eval_X,
+    Polynomial.eval_C, sub_self]
+
+theorem eval_polyAssocieMod_eq_zero_iff (Q n p : ℕ) [Fact (Nat.Prime p)]
+    (F : InstanceSATPlus Q) (r : ZMod p) :
+    (polyAssocieMod Q n p F).eval r = 0 ↔
+      ∃ k : Fin (Q ^ n), evalSATPlus Q n F k = true ∧ ((k : ℕ) : ZMod p) = r := by
+  dsimp [polyAssocieMod]
+  rw [Polynomial.eval_prod, Finset.prod_eq_zero_iff]
+  constructor
+  · rintro ⟨k, hk_mem, hk_eval⟩
+    rw [solFinset, Finset.mem_filter] at hk_mem
+    rw [Polynomial.eval_sub, Polynomial.eval_X, Polynomial.eval_C, sub_eq_zero] at hk_eval
+    exact ⟨k, hk_mem.2, hk_eval.symm⟩
+  · rintro ⟨k, hk_sat, rfl⟩
+    refine ⟨k, Finset.mem_filter.mpr ⟨Finset.mem_univ k, hk_sat⟩, ?_⟩
+    rw [Polynomial.eval_sub, Polynomial.eval_X,
+      Polynomial.eval_C, sub_self]
+
+noncomputable def rootsInFp (p : ℕ) [NeZero p] (P : Polynomial (ZMod p)) : Finset (ZMod p) :=
+  Finset.univ.filter (fun r : ZMod p => P.eval r = 0)
+
+
+def prodPrimes (r : ℕ) (primes : Fin r → ℕ) : ℕ :=
+  ∏ i : Fin r, primes i
+
+
+def crtStep (m₁ m₂ : ℕ) (h : Nat.Coprime m₁ m₂) (a₁ : ZMod m₁) (a₂ : ZMod m₂) :
+    ZMod (m₁ * m₂) :=
+  (ZMod.chineseRemainder h).symm (a₁, a₂)
+
+theorem crt_unique_witness_of_lt_modulus (Q n M : ℕ) [NeZero M]
+    (hM : Q ^ n ≤ M) (k : Fin (Q ^ n)) :
+    (((k : ℕ) : ZMod M).val) = k.val := by
+  have hk_lt_M : (k : ℕ) < M := Nat.lt_of_lt_of_le k.isLt hM
+  exact ZMod.val_natCast_of_lt hk_lt_M
+
+
+structure ModularNewtonCRTExtractor (Q : ℕ) where
+  numPrimes : ℕ → InstanceSATPlus Q → ℕ
+  primes : (n : ℕ) → (F : InstanceSATPlus Q) → Fin (numPrimes n F) → ℕ
+  degreeBound : ℕ → InstanceSATPlus Q → ℕ
+  crt_capacity : ∀ (n : ℕ) (F : InstanceSATPlus Q),
+    Q ^ n ≤ prodPrimes (numPrimes n F) (primes n F)
+  reconstructFromLocalRoots :
+    (n : ℕ) → (F : InstanceSATPlus Q) → CostM (Option (Fin (Q ^ n)))
+  poly_bound : Polynomial ℕ
+  cost_le_poly : ∀ (n : ℕ) (F : InstanceSATPlus Q),
+    (reconstructFromLocalRoots n F).cost ≤ poly_bound.eval (inputSizeSATPlus Q n F)
+  spec_from_polyAssocie_and_crt : ∀ (n : ℕ) (F : InstanceSATPlus Q),
+    (∀ (i : Fin (numPrimes n F)) (k : Fin (Q ^ n)),
+      evalSATPlus Q n F k = true →
+        (polyAssocieMod Q n (primes n F i) F).eval ((k : ℕ) : ZMod (primes n F i)) = 0) →
+    Q ^ n ≤ prodPrimes (numPrimes n F) (primes n F) →
+    ((∀ k : Fin (Q ^ n), (reconstructFromLocalRoots n F).val =
+      some k → evalSATPlus Q n F k = true) ∧
+     ((∃ k : Fin (Q ^ n), evalSATPlus Q n F k = true) →
+        ∃ k : Fin (Q ^ n), (reconstructFromLocalRoots n F).val = some k))
+
+def buildEffectiveModularClosure (Q : ℕ) (E : ModularNewtonCRTExtractor Q) :
+    EffectiveModularClosure Q where
+  numPrimes := E.numPrimes
+  primes := E.primes
+  degreeBound := E.degreeBound
+  extractWitness := E.reconstructFromLocalRoots
+  poly_bound := E.poly_bound
+  cost_le_poly := E.cost_le_poly
+  spec_from_moments := by
+    intro n F _h_moments
+    have h_roots : ∀ (i : Fin (E.numPrimes n F)) (k : Fin (Q ^ n)),
+        evalSATPlus Q n F k = true →
+          (polyAssocieMod Q n (E.primes n F i) F).eval ((k : ℕ) : ZMod (E.primes n F i)) = 0 := by
+      intro i k hk
+      exact eval_polyAssocieMod_eq_zero_of_sol Q n (E.primes n F i) F k hk
+    exact E.spec_from_polyAssocie_and_crt n F h_roots (E.crt_capacity n F)
+
+theorem Standard_P_eq_NP_from_NewtonCRT
+    (E : ModularNewtonCRTExtractor 2)
+    {α : Type} (L : DecisionProblem α) :
+    InClassP L ↔ InClassNP L :=
+  Standard_P_eq_NP_from_ModularClosure (buildEffectiveModularClosure 2 E) L
+
+noncomputable def canonicalPrimes (n : ℕ) (i : Fin n) : ℕ :=
+  Nat.nth Nat.Prime i.val
+
+lemma two_le_canonicalPrimes (n : ℕ) (i : Fin n) : 2 ≤ canonicalPrimes n i := by
+  have hprime : Nat.Prime (Nat.nth Nat.Prime i.val) :=
+    Nat.nth_mem_of_infinite Nat.infinite_setOfPred_prime i.val
+  exact hprime.two_le
+
+theorem crt_capacity_canonical (n : ℕ) :
+    2 ^ n ≤ prodPrimes n (canonicalPrimes n) := by
+  dsimp [prodPrimes]
+  calc
+    2 ^ n = ∏ _i : Fin n, 2 := by
+      rw [Finset.prod_const, Finset.card_univ, Fintype.card_fin]
+    _ ≤ ∏ i : Fin n, canonicalPrimes n i := by
+      apply Finset.prod_le_prod
+      intro i _
+      exact two_le_canonicalPrimes n i
+
+noncomputable def mkCanonicalExtractor
+    (degreeBound : ℕ → InstanceSATPlus 2 → ℕ)
+    (reconstruct : (n : ℕ) → (F : InstanceSATPlus 2) → CostM (Option (Fin (2 ^ n))))
+    (poly_bound : Polynomial ℕ)
+    (cost_le_poly : ∀ n F, (reconstruct n F).cost ≤ poly_bound.eval (inputSizeSATPlus 2 n F))
+    (spec : ∀ n F,
+      (∀ (i : Fin n) (k : Fin (2 ^ n)),
+        evalSATPlus 2 n F k = true →
+          (polyAssocieMod 2 n (canonicalPrimes n i) F).eval
+            ((k : ℕ) : ZMod (canonicalPrimes n i)) = 0) →
+      2 ^ n ≤ prodPrimes n (canonicalPrimes n) →
+      ((∀ k, (reconstruct n F).val = some k → evalSATPlus 2 n F k = true) ∧
+       ((∃ k, evalSATPlus 2 n F k = true) → ∃ k, (reconstruct n F).val = some k))) :
+    ModularNewtonCRTExtractor 2 where
+  numPrimes := fun n _ => n
+  primes := fun n _ => canonicalPrimes n
+  degreeBound := degreeBound
+  crt_capacity := fun n _ => crt_capacity_canonical n
+  reconstructFromLocalRoots := reconstruct
+  poly_bound := poly_bound
+  cost_le_poly := cost_le_poly
+  spec_from_polyAssocie_and_crt := spec
+
+----------------------------------------------------------------------
+
+structure Verrou1_PolyTimeTrace where
+  /-- Algorithme effectif calculant la m-ième somme de Newton modulo p -/
+  computeTrace : (n p m : ℕ) → (F : InstanceSATPlus 2) → CostM (ZMod p)
+  /-- Polynôme bornant le coût du calcul d'une trace -/
+  poly_bound : Polynomial ℕ
+  /-- Le coût est polynomial en la taille de l'instance + m + p -/
+  cost_le_poly : ∀ (n p m : ℕ) (F : InstanceSATPlus 2),
+    (computeTrace n p m F).cost ≤ poly_bound.eval (inputSizeSATPlus 2 n F + m + p)
+  /-- Correction : la valeur calculée est bien la trace de M_m_SAT_mod (= newtonSumMod) -/
+  spec : ∀ (n p m : ℕ) (F : InstanceSATPlus 2),
+    (computeTrace n p m F).val = newtonSumMod 2 n p F m
+
+structure Verrou2_PolyTimeLocalRoots where
+  /-- Borne polynomiale sur le nombre de racines / le degré utilisé -/
+  degreeBound : ℕ → InstanceSATPlus 2 → ℕ
+  /-- Algorithme qui, à partir d'un oracle de traces (Verrou 1),
+      renvoie une liste de racines candidates dans ZMod p -/
+  extractLocalRoots :
+    (n p : ℕ) → (F : InstanceSATPlus 2) →
+    (traceOracle : ℕ → CostM (ZMod p)) →
+    CostM (List (ZMod p))
+  /-- Borne polynomiale sur le coût -/
+  poly_bound : Polynomial ℕ
+  cost_le_poly : ∀ (n p : ℕ) (F : InstanceSATPlus 2) (oracle : ℕ → CostM (ZMod p)),
+    (extractLocalRoots n p F oracle).cost ≤ poly_bound.eval (inputSizeSATPlus 2 n F + p)
+  spec : ∀ (n p : ℕ) (F : InstanceSATPlus 2) (oracle : ℕ → CostM (ZMod p)),
+    (∀ m, (oracle m).val = newtonSumMod 2 n p F m) →
+    (∃ k : Fin (2 ^ n), evalSATPlus 2 n F k = true) →
+    ∃ k : Fin (2 ^ n), evalSATPlus 2 n F k = true ∧
+      ((k : ℕ) : ZMod p) ∈ (extractLocalRoots n p F oracle).val
+
+structure Verrou3_PolyTimeCRTRecombination where
+  /-- Algorithme de recombinaison (Garner / CRT) prenant
+  les listes de résidus pour p_0, ..., p_{n-1} -/
+  recombine :
+    (n : ℕ) → (F : InstanceSATPlus 2) →
+    (localRoots : (i : Fin n) → List (ZMod (canonicalPrimes n i))) →
+    CostM (Option (Fin (2 ^ n)))
+  /-- Borne polynomiale sur le coût -/
+  poly_bound : Polynomial ℕ
+  cost_le_poly : ∀ (n : ℕ) (F : InstanceSATPlus 2)
+  (localRoots : (i : Fin n) → List (ZMod (canonicalPrimes n i))),
+    (recombine n F localRoots).cost ≤ poly_bound.eval (inputSizeSATPlus 2 n F)
+  /-- Correction (Soundness) : si l'algorithme renvoie `some k`, alors k satisfait F -/
+  soundness : ∀ (n : ℕ) (F : InstanceSATPlus 2)
+  (localRoots : (i : Fin n) → List (ZMod (canonicalPrimes n i)))
+    (k : Fin (2 ^ n)),
+    (recombine n F localRoots).val = some k → evalSATPlus 2 n F k = true
+  /-- Complétude : s'il existe une solution k dont les résidus mod p_i sont dans `localRoots i`,
+      alors l'algorithme trouve une solution -/
+  completeness : ∀ (n : ℕ) (F : InstanceSATPlus 2)
+  (localRoots : (i : Fin n) → List (ZMod (canonicalPrimes n i))),
+    (∃ k : Fin (2 ^ n), evalSATPlus 2 n F k = true ∧
+      ∀ i : Fin n, ((k : ℕ) : ZMod (canonicalPrimes n i)) ∈ localRoots i) →
+    ∃ k_out : Fin (2 ^ n), (recombine n F localRoots).val = some k_out
+
+
+noncomputable def blockNewtonSumMod (Q n p : ℕ) (F : InstanceSATPlus Q)
+    (m start len : ℕ) : ZMod p :=
+  ∑ x ∈ (solFinset Q n F).filter (fun k : Fin (Q ^ n) => start ≤ (k : ℕ) ∧ (k : ℕ) < start + len),
+    ((x : ℕ) : ZMod p) ^ m
+
+theorem newtonSumMod_eq_sum_blocks_add_rem
+    (Q n p : ℕ) (F : InstanceSATPlus Q) (m B : ℕ) (_ : 0 < B) :
+    newtonSumMod Q n p F m =
+      (∑ b ∈ Finset.range (Q ^ n / B), blockNewtonSumMod Q n p F m (b * B) B) +
+      blockNewtonSumMod Q n p F m ((Q ^ n / B) * B) (Q ^ n % B) := by
+  dsimp [newtonSumMod, blockNewtonSumMod]
+  have h_blocks : ∀ k : ℕ,
+      ∑ b ∈ Finset.range k,
+        (∑ x ∈ (solFinset Q n F).filter
+        (fun x : Fin (Q ^ n) => b * B ≤ (x : ℕ) ∧ (x : ℕ) < b * B + B),
+          ((x : ℕ) : ZMod p) ^ m) =
+      ∑ x ∈ (solFinset Q n F).filter (fun x : Fin (Q ^ n) => (x : ℕ) < k * B),
+        ((x : ℕ) : ZMod p) ^ m := by
+    intro k
+    induction k with
+    | zero =>
+      simp
+    | succ k ih =>
+      rw [Finset.sum_range_succ, ih]
+      rw [← Finset.sum_union]
+      · congr 1
+        ext x
+        simp only [Finset.mem_union, Finset.mem_filter]
+        constructor
+        · rintro (⟨hx, hlt⟩ | ⟨hx, _, hlt⟩)
+          · exact ⟨hx, lt_of_lt_of_le hlt (Nat.mul_le_mul_right B (Nat.le_succ k))⟩
+          · exact ⟨hx, by simpa [Nat.succ_mul] using hlt⟩
+        · rintro ⟨hx, hlt⟩
+          by_cases h : (x : ℕ) < k * B
+          · exact Or.inl ⟨hx, h⟩
+          · exact Or.inr ⟨hx, Nat.le_of_not_lt h, by simpa [Nat.succ_mul] using hlt⟩
+      · rw [Finset.disjoint_left]
+        intro x hx1 hx2
+        simp only [Finset.mem_filter] at hx1 hx2
+        omega
+  rw [h_blocks (Q ^ n / B)]
+  rw [← Finset.sum_union]
+  · congr 1
+    ext x
+    simp only [Finset.mem_union, Finset.mem_filter]
+    have h_div_add_mod : (Q ^ n / B) * B + Q ^ n % B = Q ^ n := by
+      simpa [Nat.mul_comm] using Nat.div_add_mod (Q ^ n) B
+    constructor
+    · intro hx
+      by_cases h : (x : ℕ) < (Q ^ n / B) * B
+      · exact Or.inl ⟨hx, h⟩
+      · refine Or.inr ⟨hx, Nat.le_of_not_lt h, ?_⟩
+        rw [h_div_add_mod]
+        exact x.isLt
+    · rintro (⟨hx, _⟩ | ⟨hx, _⟩) <;> exact hx
+  · rw [Finset.disjoint_left]
+    intro x hx1 hx2
+    simp only [Finset.mem_filter] at hx1 hx2
+    omega
+
+
+
+
+
+
+
+
+
+
 end P_NP
