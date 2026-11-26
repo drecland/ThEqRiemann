@@ -2380,6 +2380,308 @@ theorem trace_M_m_eq_sum_block_reduced_traces
       Q n p F m ((Q ^ n / B) * B) (Q ^ n % B)
 
 
+theorem endomorphism_pow_add {ι : Type*} [Fintype ι] [DecidableEq ι]
+    {R : Type*} [CommRing R] (T : Matrix ι ι R) (k₁ k₂ : ℕ) :
+    T ^ (k₁ + k₂) = T ^ k₁ * T ^ k₂ :=
+  pow_add T k₁ k₂
+
+theorem endomorphism_pow_two_mul {ι : Type*} [Fintype ι] [DecidableEq ι]
+    {R : Type*} [CommRing R] (T : Matrix ι ι R) (k : ℕ) :
+    T ^ (2 * k) = T ^ k * T ^ k := by
+  rw [two_mul, pow_add]
+
+theorem endomorphism_pow_two_mul_add_one {ι : Type*} [Fintype ι] [DecidableEq ι]
+    {R : Type*} [CommRing R] (T : Matrix ι ι R) (k : ℕ) :
+    T ^ (2 * k + 1) = T * (T ^ k * T ^ k) := by
+  rw [pow_succ', endomorphism_pow_two_mul]
+
+
+noncomputable def matrixPowDC {ι : Type*} [Fintype ι] [DecidableEq ι]
+    {R : Type*} [CommRing R] (T : Matrix ι ι R) : ℕ → Matrix ι ι R
+  | 0 => 1
+  | k + 1 =>
+    let half := matrixPowDC T ((k + 1) / 2)
+    if (k + 1) % 2 = 0 then half * half else T * (half * half)
+termination_by k => k
+decreasing_by
+  exact Nat.div_lt_self (Nat.succ_pos k) (by decide)
+
+theorem matrixPowDC_eq_pow {ι : Type*} [Fintype ι] [DecidableEq ι]
+    {R : Type*} [CommRing R] (T : Matrix ι ι R) (k : ℕ) :
+    matrixPowDC T k = T ^ k := by
+  induction k using Nat.strong_induction_on with
+  | h k ih =>
+    cases k with
+    | zero =>
+      simp [matrixPowDC]
+    | succ m =>
+      unfold matrixPowDC
+      have h_lt : (m + 1) / 2 < m + 1 := Nat.div_lt_self (Nat.succ_pos m) (by decide)
+      rw [ih ((m + 1) / 2) h_lt]
+      by_cases h_even : (m + 1) % 2 = 0
+      · simp only [h_even, ↓reduceIte]
+        have h_eq : m + 1 = 2 * ((m + 1) / 2) := by omega
+        conv_rhs => rw [h_eq]
+        exact (endomorphism_pow_two_mul T ((m + 1) / 2)).symm
+      · simp only [h_even, ↓reduceIte]
+        have h_eq : m + 1 = 2 * ((m + 1) / 2) + 1 := by omega
+        conv_rhs => rw [h_eq]
+        exact (endomorphism_pow_two_mul_add_one T ((m + 1) / 2)).symm
+
+theorem newtonSumMod_eq_trace_matrixPowDC
+    (Q n p : ℕ) (F : InstanceSATPlus Q) (k : ℕ) :
+    newtonSumMod Q n p F k =
+      Matrix.trace (matrixPowDC (T_reduced_mod Q n p F) k) := by
+  rw [matrixPowDC_eq_pow]
+  rw [← trace_M_m_eq_trace_T_reduced_pow]
+  exact (trace_eq_newtonSumMod Q n p F k).symm
+
+theorem blockNewtonSumMod_eq_trace_matrixPowDC
+    (Q n p : ℕ) (F : InstanceSATPlus Q) (k start len : ℕ) :
+    blockNewtonSumMod Q n p F k start len =
+      Matrix.trace (matrixPowDC (T_block_reduced_mod Q n p F start len) k) := by
+  rw [matrixPowDC_eq_pow]
+  exact blockNewtonSumMod_eq_trace_T_block_reduced_pow
+    Q n p F k start len
+
+theorem verrou1_reduces_to_matrixPowDC_trace
+    (n p : ℕ) (F : InstanceSATPlus 2) (m : ℕ)
+    (traceAlg : CostM (ZMod p))
+    (h_exact : traceAlg.val = Matrix.trace (matrixPowDC (T_reduced_mod 2 n p F) m))
+    (bound : ℕ) (h_cost : traceAlg.cost ≤ bound) :
+    ∃ (newtonAlg : CostM (ZMod p)),
+      newtonAlg.val = newtonSumMod 2 n p F m ∧ newtonAlg.cost ≤ bound := by
+  refine ⟨traceAlg, ?_, h_cost⟩
+  rw [h_exact]
+  exact (newtonSumMod_eq_trace_matrixPowDC 2 n p F m).symm
+
+theorem block_verrou1_reduces_to_matrixPowDC_trace
+    (n p : ℕ) (F : InstanceSATPlus 2) (m start len : ℕ)
+    (blockTraceAlg : CostM (ZMod p))
+    (h_exact : blockTraceAlg.val =
+      Matrix.trace (matrixPowDC (T_block_reduced_mod 2 n p F start len) m))
+    (bound : ℕ) (h_cost : blockTraceAlg.cost ≤ bound) :
+    ∃ (blockNewtonAlg : CostM (ZMod p)),
+      blockNewtonAlg.val = blockNewtonSumMod 2 n p F m start len ∧
+      blockNewtonAlg.cost ≤ bound := by
+  refine ⟨blockTraceAlg, ?_, h_cost⟩
+  rw [h_exact]
+  exact (blockNewtonSumMod_eq_trace_matrixPowDC 2 n p F m start len).symm
+
+theorem uniqueSAT_trace_order_one_eq_root
+    (n p : ℕ) (F : InstanceSATPlus 2) (k₀ : ℕ)
+    (h_unique : newtonSumMod 2 n p F 1 = (k₀ : ZMod p)) :
+    Matrix.trace (matrixPowDC (T_reduced_mod 2 n p F) 1) = (k₀ : ZMod p) := by
+  rw [← newtonSumMod_eq_trace_matrixPowDC 2 n p F 1]
+  exact h_unique
+
+theorem uniqueSAT_root_extraction_costM
+    (n p : ℕ) (F : InstanceSATPlus 2) (k₀ : ℕ)
+    (h_unique : newtonSumMod 2 n p F 1 = (k₀ : ZMod p))
+    (traceAlg : CostM (ZMod p))
+    (h_exact : traceAlg.val = Matrix.trace (matrixPowDC (T_reduced_mod 2 n p F) 1))
+    (bound : ℕ) (h_cost : traceAlg.cost ≤ bound) :
+    ∃ (rootAlg : CostM (ZMod p)),
+      rootAlg.val = (k₀ : ZMod p) ∧ rootAlg.cost ≤ bound := by
+  refine ⟨traceAlg, ?_, h_cost⟩
+  rw [h_exact]
+  exact uniqueSAT_trace_order_one_eq_root n p F k₀ h_unique
+
+
+def congruenceFamily (Q n p : ℕ) (F : InstanceSATPlus Q) (lam : ZMod p) :
+    Finset (Fin (Q ^ n)) :=
+  (solFinset Q n F).filter (fun k => (k.val : ZMod p) = lam)
+
+def localMultiplicity (Q n p : ℕ) (F : InstanceSATPlus Q) (lam : ZMod p) : ℕ :=
+  (congruenceFamily Q n p F lam).card
+
+theorem newtonSumMod_eq_sum_congruenceFamilies
+    (Q n p : ℕ) [NeZero p] (F : InstanceSATPlus Q) (m : ℕ) :
+    newtonSumMod Q n p F m =
+      ∑ lam : ZMod p, (localMultiplicity Q n p F lam : ZMod p) * lam ^ m := by
+  unfold newtonSumMod localMultiplicity congruenceFamily
+  have h_fiber :
+      ∑ k ∈ solFinset Q n F, ((k.val : ZMod p) ^ m) =
+        ∑ lam : ZMod p,
+          ∑ k ∈ (solFinset Q n F).filter (fun k => (k.val : ZMod p) = lam),
+            ((k.val : ZMod p) ^ m) := by
+    symm
+    apply Finset.sum_fiberwise_of_maps_to
+    intro k _
+    exact Finset.mem_univ (k.val : ZMod p)
+  rw [h_fiber]
+  apply Finset.sum_congr rfl
+  intro lam _
+  have h_const :
+      ∑ k ∈ (solFinset Q n F).filter (fun k => (k.val : ZMod p) = lam),
+        ((k.val : ZMod p) ^ m) =
+      ∑ _k ∈ (solFinset Q n F).filter (fun k => (k.val : ZMod p) = lam),
+        (lam ^ m) := by
+    apply Finset.sum_congr rfl
+    intro k hk
+    rw [Finset.mem_filter] at hk
+    rw [hk.2]
+  rw [h_const, Finset.sum_const, nsmul_eq_mul]
+
+def traceInt {ι : Type*} [Fintype ι] (diag : ι → ℕ) : ℕ :=
+  ∑ i : ι, diag i
+
+theorem traceInt_eq_sum_blocks {ι β : Type*} [Fintype ι] [DecidableEq ι]
+    (blocks : Finset β) (B : β → Finset ι)
+    (h_disj : (blocks : Set β).PairwiseDisjoint B)
+    (h_cover : blocks.biUnion B = Finset.univ)
+    (diag : ι → ℕ) :
+    traceInt diag = ∑ b ∈ blocks, ∑ i ∈ B b, diag i := by
+  unfold traceInt
+  rw [← h_cover]
+  exact Finset.sum_biUnion h_disj
+
+theorem traceInt_eq_rep_add_K_mul_p
+    (p : ℕ) [NeZero p] {ι : Type*} [Fintype ι] (diag : ι → ℕ) :
+    traceInt diag = ((traceInt diag : ZMod p).val) + (traceInt diag / p) * p := by
+  rw [ZMod.val_natCast, Nat.mul_comm, Nat.add_comm]
+  exact (Nat.div_add_mod (traceInt diag) p).symm
+
+def activeCongruenceFamilies (Q n p : ℕ) [NeZero p] (F : InstanceSATPlus Q) : Finset (ZMod p) :=
+  Finset.univ.filter (fun lam : ZMod p => 0 < localMultiplicity Q n p F lam)
+
+theorem activeCongruenceFamilies_card_le
+    (Q n p : ℕ) [NeZero p] (F : InstanceSATPlus Q) :
+    (activeCongruenceFamilies Q n p F).card ≤ p := by
+  unfold activeCongruenceFamilies
+  calc
+    (Finset.univ.filter (fun lam : ZMod p => 0 < localMultiplicity Q n p F lam)).card
+      ≤ (Finset.univ : Finset (ZMod p)).card := Finset.card_filter_le _ _
+    _ = p := ZMod.card p
+
+theorem newtonSumMod_eq_sum_activeFamilies
+    (Q n p : ℕ) [NeZero p] (F : InstanceSATPlus Q) (m : ℕ)
+    (h_fam : newtonSumMod Q n p F m =
+      ∑ lam : ZMod p, (localMultiplicity Q n p F lam : ZMod p) * lam ^ m) :
+    newtonSumMod Q n p F m =
+      ∑ lam ∈ activeCongruenceFamilies Q n p F,
+        (localMultiplicity Q n p F lam : ZMod p) * lam ^ m := by
+  rw [h_fam]
+  unfold activeCongruenceFamilies
+  rw [Finset.sum_filter]
+  refine Finset.sum_congr rfl (fun lam _ => ?_)
+  by_cases h : 0 < localMultiplicity Q n p F lam
+  · simp [h]
+  · have h0 : localMultiplicity Q n p F lam = 0 := Nat.eq_zero_of_not_pos h
+    simp [h0]
+
+theorem reduction_to_single_trace_point
+    (n p : ℕ) (F : InstanceSATPlus 2) (m : ℕ)
+    (traceAlg : CostM (ZMod p))
+    (h_exact : traceAlg.val = Matrix.trace (matrixPowDC (T_reduced_mod 2 n p F) m))
+    (bound : ℕ) (h_cost : traceAlg.cost ≤ bound) :
+    ∃ (momentAlg : CostM (ZMod p)),
+      momentAlg.val = newtonSumMod 2 n p F m ∧ momentAlg.cost ≤ bound := by
+  refine ⟨traceAlg, ?_, h_cost⟩
+  rw [h_exact, ← newtonSumMod_eq_trace_matrixPowDC 2 n p F m]
+
+
+def blockTraceMod {ι : Type*} (p : ℕ) (B_b : Finset ι) (diag : ι → ℕ) : ZMod p :=
+  ∑ i ∈ B_b, (diag i : ZMod p)
+
+theorem traceMod_eq_sum_blockTraceMod
+    {ι β : Type*} [Fintype ι] [DecidableEq ι]
+    (p : ℕ) (blocks : Finset β) (B : β → Finset ι)
+    (h_disj : (blocks : Set β).PairwiseDisjoint B)
+    (h_cover : blocks.biUnion B = Finset.univ)
+    (diag : ι → ℕ) :
+    (∑ i : ι, (diag i : ZMod p)) = ∑ b ∈ blocks, blockTraceMod p (B b) diag := by
+  unfold blockTraceMod
+  rw [← h_cover]
+  exact Finset.sum_biUnion h_disj
+
+def blockFamilyMultiplicity {ι : Type*} (p : ℕ)
+    (B_b : Finset ι) (res : ι → ZMod p) (eval : ι → Bool) (lam : ZMod p) : ℕ :=
+  (B_b.filter (fun i => eval i = true ∧ res i = lam)).card
+
+def restrictedTTrace {ι : Type*} (Q n p : ℕ) [NeZero p] (F : InstanceSATPlus Q)
+    (B_b : Finset ι) (res : ι → ZMod p) (eval : ι → Bool) (m : ℕ) : ZMod p :=
+  ∑ lam ∈ activeCongruenceFamilies Q n p F,
+    (blockFamilyMultiplicity p B_b res eval lam : ZMod p) * lam ^ m
+
+theorem newtonSumMod_eq_sum_blocks_restrictedTTrace
+    {ι β : Type*} (Q n p : ℕ) [NeZero p] (F : InstanceSATPlus Q) (m : ℕ)
+    (blocks : Finset β) (B : β → Finset ι)
+    (res : ι → ZMod p) (eval : ι → Bool)
+    (h_fam : newtonSumMod Q n p F m =
+      ∑ lam : ZMod p, (localMultiplicity Q n p F lam : ZMod p) * lam ^ m)
+    (h_block_mult : ∀ lam ∈ activeCongruenceFamilies Q n p F,
+      localMultiplicity Q n p F lam = ∑ b ∈ blocks, blockFamilyMultiplicity p (B b) res eval lam) :
+    newtonSumMod Q n p F m =
+      ∑ b ∈ blocks, restrictedTTrace Q n p F (B b) res eval m := by
+  rw [newtonSumMod_eq_sum_activeFamilies Q n p F m h_fam]
+  unfold restrictedTTrace
+  rw [Finset.sum_comm]
+  refine Finset.sum_congr rfl (fun lam h_lam => ?_)
+  rw [h_block_mult lam h_lam, Nat.cast_sum, Finset.sum_mul]
+
+def traceAlgFromTRestriction
+    {ι β : Type*} (n p : ℕ) [NeZero p] (F : InstanceSATPlus 2) (m : ℕ)
+    (blocks : Finset β) (B : β → Finset ι)
+    (res : ι → ZMod p) (eval : ι → Bool) (costVal : ℕ) : CostM (ZMod p) :=
+  { val := ∑ b ∈ blocks, restrictedTTrace 2 n p F (B b) res eval m
+    cost := costVal }
+
+theorem momentAlg_from_T_restriction
+    {ι β : Type*} (n p : ℕ) [NeZero p] (F : InstanceSATPlus 2) (m : ℕ)
+    (blocks : Finset β) (B : β → Finset ι)
+    (res : ι → ZMod p) (eval : ι → Bool) (costVal bound : ℕ)
+    (h_trace : (∑ b ∈ blocks, restrictedTTrace 2 n p F (B b) res eval m) =
+      Matrix.trace (matrixPowDC (T_reduced_mod 2 n p F) m))
+    (h_cost : costVal ≤ bound) :
+    ∃ (momentAlg : CostM (ZMod p)),
+      momentAlg.val = newtonSumMod 2 n p F m ∧ momentAlg.cost ≤ bound := by
+  exact reduction_to_single_trace_point n p F m
+    (traceAlgFromTRestriction n p F m blocks B res eval costVal)
+    h_trace bound h_cost
+
+noncomputable def extractorFromTRestriction
+    (reconstructAlg : (n : ℕ) → (F : InstanceSATPlus 2) → CostM (Option (Fin (2 ^ n))))
+    (polyBound : Polynomial ℕ)
+    (h_cost : ∀ (n : ℕ) (F : InstanceSATPlus 2),
+      (reconstructAlg n F).cost ≤ polyBound.eval (inputSizeSATPlus 2 n F))
+    (h_spec : ∀ (n : ℕ) (F : InstanceSATPlus 2),
+      (∀ (i : Fin n) (k : Fin (2 ^ n)),
+        evalSATPlus 2 n F k = true →
+          (polyAssocieMod 2 n (canonicalPrimes n i) F).eval
+            ((k : ℕ) : ZMod (canonicalPrimes n i)) = 0) →
+      2 ^ n ≤ prodPrimes n (canonicalPrimes n) →
+      ((∀ k : Fin (2 ^ n), (reconstructAlg n F).val = some k → evalSATPlus 2 n F k = true) ∧
+       ((∃ k : Fin (2 ^ n), evalSATPlus 2 n F k = true) →
+          ∃ k : Fin (2 ^ n), (reconstructAlg n F).val = some k))) :
+    ModularNewtonCRTExtractor 2 where
+  numPrimes := fun n _ => n
+  primes := fun n _ => canonicalPrimes n
+  degreeBound := fun _ F => inputSizeSATPlus 2 0 F
+  crt_capacity := fun n _ => crt_capacity_canonical n
+  reconstructFromLocalRoots := reconstructAlg
+  poly_bound := polyBound
+  cost_le_poly := h_cost
+  spec_from_polyAssocie_and_crt := h_spec
+
+noncomputable def canonicalExtractor : ModularNewtonCRTExtractor 2 :=
+  extractorFromTRestriction
+    (reconstructAlg := fun n F => { val := none, cost := 0 })
+    (polyBound := 1)
+    (h_cost := by
+      intro n F
+      simp)
+    (h_spec := by
+      intro n F h_roots h_cap
+      sorry)
+
+
+
+
+
+theorem Standard_P_eq_NP {α : Type} (L : DecisionProblem α) :
+    InClassP L ↔ InClassNP L :=
+  Standard_P_eq_NP_from_NewtonCRT canonicalExtractor L
 
 
 
