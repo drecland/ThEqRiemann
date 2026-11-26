@@ -1,13 +1,9 @@
 # ThEqRiemann
 
-## GitHub configuration
+This is my repo to my 3 month (of formalisation in lean) of work about this problème and i'm sad because someone publish a proof before me of that so i share you my work on this probleme :(
 
-To set up your new GitHub repository, follow these steps:
+There is 4 big result here, one is the equationary theorem that made you a theorem to solve equation vith meromorphic functions, 
+one is to know what are the inverse of a meromorphic function, one is a theorem to find zero form of a meromorphic function and one is 
+the proof of the riemann hypothesis, but it missing the end of the proof in lean because of the missing time
 
-* Under your repository name, click **Settings**.
-* In the **Actions** section of the sidebar, click "General".
-* Check the box **Allow GitHub Actions to create and approve pull requests**.
-* Click the **Pages** section of the settings sidebar.
-* In the **Source** dropdown menu, select "GitHub Actions".
 
-After following the steps above, you can remove this section from the README file.
