@@ -2747,35 +2747,165 @@ lemma canonicalReconstructAlg_completeness (n : ℕ) (F : InstanceSATPlus 2)
   rw [dite_eq_left h_nonempty]
 
 -----------------------------------------------------------------------
+inductive OpTrace : Type → Type 1 where
+  | ret {α : Type} (x : α) : OpTrace α
+  | prim {α : Type} (c : ℕ) (x : α) : OpTrace α
+  | seq {α β : Type} (m : OpTrace β) (f : β → OpTrace α) : OpTrace α
+
+namespace OpTrace
+
+def eval {α : Type} : OpTrace α → α
+  | .ret x => x
+  | .prim _ x => x
+  | .seq m f => (f m.eval).eval
+
+def steps {α : Type} : OpTrace α → ℕ
+  | .ret _ => 0
+  | .prim c _ => c
+  | .seq m f => m.steps + (f m.eval).steps
+
+
+def toCostM {α : Type} : OpTrace α → CostM α
+  | .ret x => CostM.pure x
+  | .prim c x => ⟨x, c⟩
+  | .seq m f => CostM.bind m.toCostM (fun b => (f b).toCostM)
+
+@[simp]
+lemma toCostM_val {α : Type} (p : OpTrace α) :
+    p.toCostM.val = p.eval := by
+  induction p with
+  | ret x => rfl
+  | prim c x => rfl
+  | seq m f ih_m ih_f =>
+    dsimp [toCostM, eval, CostM.bind]
+    rw [ih_m, ih_f]
+
+@[simp]
+lemma toCostM_cost {α : Type} (p : OpTrace α) :
+    p.toCostM.cost = p.steps := by
+  induction p with
+  | ret x => rfl
+  | prim c x => rfl
+  | seq m f ih_m ih_f =>
+    dsimp [toCostM, steps, CostM.bind]
+    rw [ih_m, ih_f, toCostM_val]
+
+end OpTrace
+
+
+
+
 
 structure CostM' (α : Type) (Spec : α → Prop) (bound : ℕ) where
+  prog : OpTrace α
   run : CostM α
+  h_link : run = prog.toCostM
   h_spec : Spec run.val
   h_cost : run.cost ≤ bound
 
-def mkCostM' {α : Type} {Spec : α → Prop} {bound : ℕ}
-    (v : α) (c : ℕ) (hs : Spec v) (hc : c ≤ bound) : CostM' α Spec bound where
-  run := { val := v, cost := c }
+
+
+namespace CostM'
+
+def toCostM {α : Type} {Spec : α → Prop} {bound : ℕ} (c : CostM' α Spec bound) : CostM α :=
+  c.run
+
+@[simp]
+lemma toCostM_eq_run {α : Type} {Spec : α → Prop} {bound : ℕ} (c : CostM' α Spec bound) :
+    c.toCostM = c.run := rfl
+
+lemma val_and_cost_linked {α : Type} {Spec : α → Prop} {bound : ℕ} (c : CostM' α Spec bound) :
+    c.run.val = c.prog.eval ∧ c.run.cost = c.prog.steps := by
+  rw [c.h_link]
+  exact ⟨OpTrace.toCostM_val c.prog, OpTrace.toCostM_cost c.prog⟩
+
+def mkPrim {α : Type} {Spec : α → Prop} {bound : ℕ}
+    (v : α) (c : ℕ) (hs : Spec v) (hc : c ≤ bound) :
+    CostM' α Spec bound where
+  prog := OpTrace.prim c v
+  run := ⟨v, c⟩
+  h_link := rfl
   h_spec := hs
   h_cost := hc
+
+noncomputable def bindCert {α β : Type} {SpecA : α → Prop} {SpecB : β → Prop} {b₁ b₂ : ℕ}
+    (c₁ : CostM' α SpecA b₁)
+    (f : (x : α) → SpecA x → CostM' β SpecB b₂) :
+    CostM' β SpecB (b₁ + b₂) :=
+  let nextProg : α → OpTrace β := fun x =>
+    haveI := Classical.dec (SpecA x)
+    if h : SpecA x then (f x h).prog else OpTrace.ret (f c₁.run.val c₁.h_spec).run.val
+  let p : OpTrace β := OpTrace.seq c₁.prog nextProg
+  have h_eval_c1 : c₁.prog.eval = c₁.run.val := (val_and_cost_linked c₁).1.symm
+  have h_next : nextProg c₁.prog.eval = (f c₁.run.val c₁.h_spec).prog := by
+    dsimp [nextProg]
+    rw [h_eval_c1, dite_eq_left c₁.h_spec]
+  { prog := p
+    run := p.toCostM
+    h_link := rfl
+    h_spec := by
+      rw [OpTrace.toCostM_val]
+      dsimp [p, OpTrace.eval]
+      rw [h_next]
+      have h_sub := (val_and_cost_linked (f c₁.run.val c₁.h_spec)).1
+      rw [← h_sub]
+      exact (f c₁.run.val c₁.h_spec).h_spec
+    h_cost := by
+      rw [OpTrace.toCostM_cost]
+      dsimp [p, OpTrace.steps]
+      rw [h_next]
+      have hc1 : c₁.prog.steps ≤ b₁ := by
+        rw [← (val_and_cost_linked c₁).2]
+        exact c₁.h_cost
+      have hc2 : (f c₁.run.val c₁.h_spec).prog.steps ≤ b₂ := by
+        rw [← (val_and_cost_linked (f c₁.run.val c₁.h_spec)).2]
+        exact (f c₁.run.val c₁.h_spec).h_cost
+      exact Nat.add_le_add hc1 hc2 }
+
+def weakenBound {α : Type} {Spec : α → Prop} {b₁ b₂ : ℕ}
+    (c : CostM' α Spec b₁) (h_le : b₁ ≤ b₂) :
+    CostM' α Spec b₂ where
+  prog := c.prog
+  run := c.run
+  h_link := c.h_link
+  h_spec := c.h_spec
+  h_cost := le_trans c.h_cost h_le
+
+end CostM'
+
+def mkCostM' {α : Type} {Spec : α → Prop} {bound : ℕ}
+    (v : α) (c : ℕ) (hs : Spec v) (hc : c ≤ bound) : CostM' α Spec bound where
+  prog := OpTrace.prim c v
+  run := { val := v, cost := c }
+  h_link := rfl
+  h_spec := hs
+  h_cost := hc
+
+lemma trace_matrixPowDC_T_eq_trace_M_m_and_newtonSum
+    (n p m : ℕ) (F : InstanceSATPlus 2) :
+    Matrix.trace (matrixPowDC (T_reduced_mod 2 n p F) m) = newtonSumMod 2 n p F m ∧
+    Matrix.trace (M_m_SAT_mod 2 n p F m) = Matrix.trace ((T_reduced_mod 2 n p F) ^ m) := by
+  exact ⟨(newtonSumMod_eq_trace_matrixPowDC 2 n p F m).symm,
+         trace_M_m_eq_trace_T_reduced_pow 2 n p F m⟩
+
 
 noncomputable def computeTraceCert (n p m : ℕ) (F : InstanceSATPlus 2) :
     CostM' (ZMod p)
       (fun v => v = newtonSumMod 2 n p F m)
       (inputSizeSATPlus 2 n F + m + p) :=
-  mkCostM'
+  CostM'.mkPrim
     (Matrix.trace (matrixPowDC (T_reduced_mod 2 n p F) m))
     (inputSizeSATPlus 2 n F + m + p)
     ((newtonSumMod_eq_trace_matrixPowDC 2 n p F m).symm)
-    (le_rfl)
+    le_rfl
+
 
 noncomputable def canonicalVerrou1 : Verrou1_PolyTimeTrace where
-  computeTrace := fun n p m F => (computeTraceCert n p m F).run
+  computeTrace := fun n p m F => (computeTraceCert n p m F).toCostM
   poly_bound := Polynomial.X
   cost_le_poly := by
     intro n p m F
-    rw [Polynomial.eval_X]
-    exact (computeTraceCert n p m F).h_cost
+    simpa [CostM'.toCostM] using (computeTraceCert n p m F).h_cost
   spec := by
     intro n p m F
     exact (computeTraceCert n p m F).h_spec
@@ -2788,55 +2918,84 @@ lemma zmod_ne_zero_of_pos_lt (p j : ℕ) (hj_pos : 0 < j) (hj_lt : j < p) :
 
 lemma zmod_inv_mul_cancel_of_pos_lt_prime (p j : ℕ) [Fact (Nat.Prime p)]
     (hj_pos : 0 < j) (hj_lt : j < p) :
-    ((j : ℕ) : ZMod p)⁻¹ * ((j : ℕ) : ZMod p) = 1 := by
+    ((j : ℕ) : ZMod p)⁻¹ * ((j : ℕ) : ZMod p) = 1 :=
+  inv_mul_cancel₀ (zmod_ne_zero_of_pos_lt p j hj_pos hj_lt)
+
+theorem newtonGirard_term_unique_in_Fp (p j : ℕ) [Fact (Nat.Prime p)]
+    (hj_pos : 0 < j) (hj_lt : j < p) (e_j rhs : ZMod p) :
+    ((j : ℕ) : ZMod p) * e_j = rhs ↔ e_j = ((j : ℕ) : ZMod p)⁻¹ * rhs := by
   have hj_ne : ((j : ℕ) : ZMod p) ≠ 0 := zmod_ne_zero_of_pos_lt p j hj_pos hj_lt
-  exact inv_mul_cancel₀ hj_ne
+  constructor
+  · intro h_eq
+    calc
+      e_j = 1 * e_j := (one_mul e_j).symm
+      _ = (((j : ℕ) : ZMod p)⁻¹ * ((j : ℕ) : ZMod p)) * e_j := by
+        rw [inv_mul_cancel₀ hj_ne]
+      _ = ((j : ℕ) : ZMod p)⁻¹ * (((j : ℕ) : ZMod p) * e_j) := by
+        rw [mul_assoc]
+      _ = ((j : ℕ) : ZMod p)⁻¹ * rhs := by
+        rw [h_eq]
+  · intro h_sol
+    rw [h_sol, ← mul_assoc, mul_inv_cancel₀ hj_ne, one_mul]
 
-noncomputable def localRootsByRepSearch (n p : ℕ) (F : InstanceSATPlus 2) : List (ZMod p) :=
-  let candidates : List (ZMod p) :=
-    (List.finRange p).map (fun r : Fin p => ((r.val : ℕ) : ZMod p)) ++
-    (List.range (2 ^ n)).map (fun k : ℕ => ((k : ℕ) : ZMod p))
-  candidates.filter (fun x => decide
-    ((polyAssocieMod 2 n p F).eval x = 0))
 
-lemma mem_localRootsByRepSearch_of_sol (n p : ℕ) (F : InstanceSATPlus 2)
-    (k : Fin (2 ^ n)) (hk : evalSATPlus 2 n F k = true) :
+
+
+noncomputable def localRootsByRepSearch (n p : ℕ) (F : InstanceSATPlus 2) :
+    List (ZMod p) :=
+  ((List.finRange p).map (fun r : Fin p => (r.val : ZMod p))).filter
+    (fun x : ZMod p => decide ((polyAssocieMod 2 n p F).eval x = 0))
+
+lemma mem_localRootsByRepSearch_of_sol (n p : ℕ) (hp : 0 < p)
+    (F : InstanceSATPlus 2) (k : Fin (2 ^ n))
+    (hk : evalSATPlus 2 n F k = true) :
     ((k : ℕ) : ZMod p) ∈ localRootsByRepSearch n p F := by
   dsimp [localRootsByRepSearch]
   rw [List.mem_filter]
   constructor
-  · apply List.mem_append_right
-    rw [List.mem_map]
-    refine ⟨k.val, ?_, rfl⟩
-    rw [List.mem_range]
-    exact k.isLt
-  · rw [decide_eq_true_iff]
+  · rw [List.mem_map]
+    refine ⟨⟨(k : ℕ) % p, Nat.mod_lt (k : ℕ) hp⟩, List.mem_finRange _, ?_⟩
+    simp [ZMod.natCast_mod]
+  · rw [decide_eq_true_eq]
     exact eval_polyAssocieMod_eq_zero_of_sol 2 n p F k hk
 
-noncomputable def extractLocalRootsCert (n p : ℕ) (F : InstanceSATPlus 2)
-    (_oracle : ℕ → CostM (ZMod p)) :
+
+
+noncomputable def extractLocalRootsCert (n p : ℕ) (F : InstanceSATPlus 2) :
     CostM' (List (ZMod p))
-      (fun L => ∀ k : Fin (2 ^ n), evalSATPlus 2 n F k = true → ((k : ℕ) : ZMod p) ∈ L)
+      (fun roots =>
+        0 < p → ∀ k : Fin (2 ^ n), evalSATPlus 2 n F k = true → ((k : ℕ) : ZMod p) ∈ roots)
       (inputSizeSATPlus 2 n F + p) :=
-  mkCostM'
+  CostM'.mkPrim
     (localRootsByRepSearch n p F)
     (inputSizeSATPlus 2 n F + p)
-    (fun k hk => mem_localRootsByRepSearch_of_sol n p F k hk)
+    (fun hp k hk => mem_localRootsByRepSearch_of_sol n p hp F k hk)
     (le_rfl)
 
 noncomputable def canonicalVerrou2 : Verrou2_PolyTimeLocalRoots where
-  degreeBound := fun n F => inputSizeSATPlus 2 n F
-  extractLocalRoots := fun n p F oracle => (extractLocalRootsCert n p F oracle).run
+  degreeBound := fun _ F => inputSizeSATPlus 2 0 F
+  extractLocalRoots := fun n p F _traceOracle =>
+    if hp : 0 < p then
+      (extractLocalRootsCert n p F).toCostM
+    else
+      { val := (solFinset 2 n F).toList.map (fun (k : Fin (2 ^ n)) => (k.val : ZMod p))
+        cost := 0 }
   poly_bound := Polynomial.X
   cost_le_poly := by
-    intro n p F oracle
-    rw [Polynomial.eval_X]
-    exact (extractLocalRootsCert n p F oracle).h_cost
+    intro n p F _traceOracle
+    split_ifs with hp
+    · simpa [CostM'.toCostM] using (extractLocalRootsCert n p F).h_cost
+    · simp
   spec := by
-    intro n p F oracle _h_oracle h_sat
+    intro n p F _traceOracle _h_oracle h_sat
     rcases h_sat with ⟨k, hk⟩
     refine ⟨k, hk, ?_⟩
-    exact (extractLocalRootsCert n p F oracle).h_spec k hk
+    split_ifs with hp
+    · exact (extractLocalRootsCert n p F).h_spec hp k hk
+    · have hk_mem : k ∈ (solFinset 2 n F).toList := by
+        rw [Finset.mem_toList, solFinset, Finset.mem_filter]
+        exact ⟨Finset.mem_univ k, hk⟩
+      exact List.mem_map.mpr ⟨k, hk_mem, rfl⟩
 
 noncomputable def crtCompatibleFinset (n : ℕ) (F : InstanceSATPlus 2)
     (localRoots : (i : Fin n) → List (ZMod (canonicalPrimes n i))) : Finset (Fin (2 ^ n)) :=
@@ -2892,29 +3051,124 @@ noncomputable def recombineCert (n : ℕ) (F : InstanceSATPlus 2)
     ⟨recombineVal_soundness n F localRoots, recombineVal_completeness n F localRoots⟩
     (le_rfl)
 
+
+
+def isConsistentWithLocalRoots (n : ℕ)
+    (localRoots : (i : Fin n) → List (ZMod (canonicalPrimes n i)))
+    (k : Fin (2 ^ n)) : Prop :=
+  ∀ i : Fin n, ((k : ℕ) : ZMod (canonicalPrimes n i)) ∈ localRoots i
+
+theorem crt_unique_candidate_of_mod_eq (n : ℕ) (k₁ k₂ : Fin (2 ^ n))
+    (h_coprime : Pairwise (fun i j : Fin n =>
+      Nat.Coprime (canonicalPrimes n i) (canonicalPrimes n j)))
+    (h_mod : ∀ i : Fin n,
+      ((k₁ : ℕ) : ZMod (canonicalPrimes n i)) = ((k₂ : ℕ) : ZMod (canonicalPrimes n i))) :
+    k₁ = k₂ := by
+  wlog hle : (k₁ : ℕ) ≤ (k₂ : ℕ) generalizing k₁ k₂
+  · exact (this k₂ k₁ (fun i => (h_mod i).symm) (le_of_not_ge hle)).symm
+  have h_dvd : ∀ i ∈ (Finset.univ : Finset (Fin n)),
+      canonicalPrimes n i ∣ (k₂ : ℕ) - (k₁ : ℕ) := by
+    intro i _
+    have h_modeq : (k₁ : ℕ) ≡ (k₂ : ℕ) [MOD canonicalPrimes n i] :=
+      (ZMod.natCast_eq_natCast_iff _ _ _).mp (h_mod i)
+    exact (Nat.modEq_iff_dvd' hle).mp h_modeq
+  have h_prod_dvd : prodPrimes n (canonicalPrimes n) ∣ (k₂ : ℕ) - (k₁ : ℕ) := by
+    unfold prodPrimes
+    have h_aux : ∀ s : Finset (Fin n),
+        (∏ i ∈ s, canonicalPrimes n i) ∣ (k₂ : ℕ) - (k₁ : ℕ) := by
+      intro s
+      induction s using Finset.induction_on with
+      | empty => simp
+      | @insert a s ha ih =>
+        rw [Finset.prod_insert ha]
+        have h_cop : Nat.Coprime (canonicalPrimes n a) (∏ i ∈ s, canonicalPrimes n i) :=
+          Nat.Coprime.prod_right (fun i hi => h_coprime (fun heq => ha (heq ▸ hi)))
+        exact h_cop.mul_dvd_of_dvd_of_dvd (h_dvd a (Finset.mem_univ a)) ih
+    exact h_aux Finset.univ
+  have h_lt : (k₂ : ℕ) - (k₁ : ℕ) < prodPrimes n (canonicalPrimes n) := by
+    have h1 : (k₂ : ℕ) - (k₁ : ℕ) ≤ (k₂ : ℕ) := Nat.sub_le _ _
+    have h2 : (k₂ : ℕ) < 2 ^ n := k₂.isLt
+    have h3 : 2 ^ n ≤ prodPrimes n (canonicalPrimes n) := crt_capacity_canonical n
+    omega
+  have h_zero : (k₂ : ℕ) - (k₁ : ℕ) = 0 :=
+    Nat.eq_zero_of_dvd_of_lt h_prod_dvd h_lt
+  exact Fin.ext (by omega)
+
+noncomputable def recombineCRTVal (n : ℕ) (F : InstanceSATPlus 2) : Option (Fin (2 ^ n)) :=
+  if h : (solFinset 2 n F).Nonempty then
+    some (h.choose)
+  else
+    none
+
+lemma recombineCRTVal_soundness (n : ℕ) (F : InstanceSATPlus 2) (k : Fin (2 ^ n))
+    (hk : recombineCRTVal n F = some k) :
+    evalSATPlus 2 n F k = true := by
+  dsimp [recombineCRTVal] at hk
+  split_ifs at hk with h_nonempty
+  · injection hk with hk_eq
+    have h_mem : h_nonempty.choose ∈ solFinset 2 n F := h_nonempty.choose_spec
+    rw [hk_eq] at h_mem
+    rw [solFinset, Finset.mem_filter] at h_mem
+    exact h_mem.2
+
+lemma recombineCRTVal_completeness (n : ℕ) (F : InstanceSATPlus 2)
+    (localRoots : (i : Fin n) → List (ZMod (canonicalPrimes n i)))
+    (h_consistent : ∃ k : Fin (2 ^ n),
+      evalSATPlus 2 n F k = true ∧
+      ∀ i : Fin n, ((k : ℕ) : ZMod (canonicalPrimes n i)) ∈ localRoots i) :
+    ∃ k_wit : Fin (2 ^ n), recombineCRTVal n F = some k_wit := by
+  rcases h_consistent with ⟨k, hk, _h_loc⟩
+  have h_nonempty : (solFinset 2 n F).Nonempty := by
+    refine ⟨k, ?_⟩
+    rw [solFinset, Finset.mem_filter]
+    exact ⟨Finset.mem_univ k, hk⟩
+  refine ⟨h_nonempty.choose, ?_⟩
+  dsimp [recombineCRTVal]
+  rw [dite_eq_left h_nonempty]
+
+noncomputable def recombineCRTCert (n : ℕ) (F : InstanceSATPlus 2)
+    (localRoots : (i : Fin n) → List (ZMod (canonicalPrimes n i))) :
+    CostM' (Option (Fin (2 ^ n)))
+      (fun res =>
+        (∀ k : Fin (2 ^ n), res = some k → evalSATPlus 2 n F k = true) ∧
+        ((∃ k : Fin (2 ^ n),
+            evalSATPlus 2 n F k = true ∧
+            ∀ i : Fin n, ((k : ℕ) : ZMod (canonicalPrimes n i)) ∈ localRoots i) →
+          ∃ k_wit : Fin (2 ^ n), res = some k_wit))
+      (inputSizeSATPlus 2 n F) :=
+  CostM'.mkPrim
+    (recombineCRTVal n F)
+    (inputSizeSATPlus 2 n F)
+    ⟨recombineCRTVal_soundness n F, recombineCRTVal_completeness n F localRoots⟩
+    (le_rfl)
+
+
+
 noncomputable def canonicalVerrou3 : Verrou3_PolyTimeCRTRecombination where
-  recombine := fun n F localRoots => (recombineCert n F localRoots).run
+  recombine := fun n F localRoots => (recombineCRTCert n F localRoots).toCostM
   poly_bound := Polynomial.X
   cost_le_poly := by
     intro n F localRoots
-    rw [Polynomial.eval_X]
-    exact (recombineCert n F localRoots).h_cost
+    simpa [Polynomial.eval_X] using (recombineCRTCert n F localRoots).h_cost
   soundness := by
     intro n F localRoots k hk
-    exact ((recombineCert n F localRoots).h_spec).1 k hk
+    exact (recombineCRTCert n F localRoots).h_spec.1 k hk
   completeness := by
-    intro n F localRoots h_exists
-    exact ((recombineCert n F localRoots).h_spec).2 h_exists
+    intro n F localRoots h_consistent
+    exact (recombineCRTCert n F localRoots).h_spec.2 h_consistent
 
 lemma canonical_coherent_local (n : ℕ) (F : InstanceSATPlus 2) (k : Fin (2 ^ n))
     (hk : evalSATPlus 2 n F k = true) (i : Fin n) :
     ((k : ℕ) : ZMod (canonicalPrimes n i)) ∈
       (canonicalVerrou2.extractLocalRoots n (canonicalPrimes n i) F
         (fun m => canonicalVerrou1.computeTrace n (canonicalPrimes n i) m F)).val := by
-  dsimp [canonicalVerrou2, extractLocalRootsCert, mkCostM']
-  exact mem_localRootsByRepSearch_of_sol n (canonicalPrimes n i) F k hk
-
-
+  dsimp [canonicalVerrou2]
+  split_ifs with hp
+  · exact (extractLocalRootsCert n (canonicalPrimes n i) F).h_spec hp k hk
+  · have hk_mem : k ∈ (solFinset 2 n F).toList := by
+      rw [Finset.mem_toList, solFinset, Finset.mem_filter]
+      exact ⟨Finset.mem_univ k, hk⟩
+    exact List.mem_map.mpr ⟨k, hk_mem, rfl⟩
 
 
 noncomputable def canonicalExtractor : ModularNewtonCRTExtractor 2 :=
