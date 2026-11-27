@@ -470,7 +470,7 @@ structure Verrou2_PolyTimeLocalRoots where
   poly_bound : Polynomial ℕ
   cost_le_poly : ∀ (n p : ℕ) (F : InstanceSATPlus 2) (oracle : ℕ → CostM (ZMod p)),
     (extractLocalRoots n p F oracle).cost ≤ poly_bound.eval (inputSizeSATPlus 2 n F + p)
-  spec : ∀ (n p : ℕ) (F : InstanceSATPlus 2) (oracle : ℕ → CostM (ZMod p)),
+  spec : ∀ (n p : ℕ) (_ : Nat.Prime p) (F : InstanceSATPlus 2) (oracle : ℕ → CostM (ZMod p)),
     (∀ m, (oracle m).val = newtonSumMod 2 n p F m) →
     (∃ k : Fin (2 ^ n), evalSATPlus 2 n F k = true) →
     ∃ k : Fin (2 ^ n), evalSATPlus 2 n F k = true ∧
@@ -718,6 +718,9 @@ def weakenBound {α : Type} {Spec : α → Prop} {b₁ b₂ : ℕ}
   h_spec := c.h_spec
   h_cost := le_trans c.h_cost h_le
 
+
+
+
 end CostM'
 
 
@@ -749,6 +752,8 @@ noncomputable def recombineCRTVal (n : ℕ) (F : InstanceSATPlus 2) : Option (Fi
   else
     none
 
+
+-----------------------------------------------------------------------
 
 
 

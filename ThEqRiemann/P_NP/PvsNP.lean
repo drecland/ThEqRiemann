@@ -6,6 +6,7 @@ import ThEqRiemann.IntegralResolutionTheorem.PartialSumProp
 import ThEqRiemann.IntegralResolutionTheorem.MtSpec
 import ThEqRiemann.IntegralResolutionTheorem.PfPolynomial
 import ThEqRiemann.P_NP.P_NP_Definitions
+import ThEqRiemann.P_NP.P_NP_AddonsToConclude
 /-! -/
 namespace P_NP
 
@@ -2352,7 +2353,7 @@ noncomputable def canonicalVerrou2 : Verrou2_PolyTimeLocalRoots where
     · simpa [CostM'.toCostM] using (extractLocalRootsCert n p F).h_cost
     · simp
   spec := by
-    intro n p F _traceOracle _h_oracle h_sat
+    intro n p _hp F _traceOracle _h_oracle h_sat
     rcases h_sat with ⟨k, hk⟩
     refine ⟨k, hk, ?_⟩
     split_ifs with hp
@@ -2535,13 +2536,41 @@ noncomputable def canonicalExtractor : ModularNewtonCRTExtractor 2 :=
     canonicalVerrou3
     canonical_coherent_local
 
+open Addons_P_NP
 
+lemma effective_coherent_local
+    (n : ℕ) (F : InstanceSATPlus 2) (k : Fin (2 ^ n))
+    (_hk : evalSATPlus 2 n F k = true) (i : Fin n) :
+    ((k : ℕ) : ZMod (canonicalPrimes n i)) ∈
+      (effectiveVerrou2.extractLocalRoots n (canonicalPrimes n i) F
+        (fun m => effectiveVerrou1.computeTrace n (canonicalPrimes n i) m F)).val := by
+  dsimp [effectiveVerrou2]
+  have hval := (extractRootsOp (canonicalPrimes n i)
+    (fun m => ((effectiveVerrou1.computeTrace n (canonicalPrimes n i) m F).val))).h_spec
+  rw [hval]
+  have hprime : Nat.Prime (canonicalPrimes n i) := by
+    dsimp [canonicalPrimes]
+    exact Nat.nth_mem_of_infinite Nat.infinite_setOfPred_prime i.val
+  have _ : Fact (Nat.Prime (canonicalPrimes n i)) := ⟨hprime⟩
+  exact mem_extractLocalRootsEffective
+    (canonicalPrimes n i)
+    (fun m => (effectiveVerrou1.computeTrace n (canonicalPrimes n i) m F).val)
+    ((k : ℕ) : ZMod (canonicalPrimes n i))
+
+noncomputable def effectiveExtractor : ModularNewtonCRTExtractor 2 :=
+  extractorFromVerrous
+    effectiveVerrou1
+    effectiveVerrou2
+    effectiveVerrou3
+    effective_coherent_local
 
 theorem Standard_P_eq_NP {α : Type} (L : DecisionProblem α) :
     InClassP L ↔ InClassNP L :=
   Standard_P_eq_NP_from_NewtonCRT canonicalExtractor L
 
-
+theorem Effective_Standard_P_eq_NP {α : Type} (L : DecisionProblem α) :
+    InClassP L ↔ InClassNP L :=
+  Standard_P_eq_NP_from_NewtonCRT effectiveExtractor L
 
 
 
