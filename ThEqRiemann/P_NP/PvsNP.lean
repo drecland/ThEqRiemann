@@ -2640,6 +2640,9 @@ theorem momentAlg_from_T_restriction
     (traceAlgFromTRestriction n p F m blocks B res eval costVal)
     h_trace bound h_cost
 
+
+
+
 noncomputable def extractorFromTRestriction
     (reconstructAlg : (n : ℕ) → (F : InstanceSATPlus 2) → CostM (Option (Fin (2 ^ n))))
     (polyBound : Polynomial ℕ)
@@ -2743,17 +2746,183 @@ lemma canonicalReconstructAlg_completeness (n : ℕ) (F : InstanceSATPlus 2)
   dsimp [canonicalReconstructAlg]
   rw [dite_eq_left h_nonempty]
 
+-----------------------------------------------------------------------
+
+structure CostM' (α : Type) (Spec : α → Prop) (bound : ℕ) where
+  run : CostM α
+  h_spec : Spec run.val
+  h_cost : run.cost ≤ bound
+
+def mkCostM' {α : Type} {Spec : α → Prop} {bound : ℕ}
+    (v : α) (c : ℕ) (hs : Spec v) (hc : c ≤ bound) : CostM' α Spec bound where
+  run := { val := v, cost := c }
+  h_spec := hs
+  h_cost := hc
+
+noncomputable def computeTraceCert (n p m : ℕ) (F : InstanceSATPlus 2) :
+    CostM' (ZMod p)
+      (fun v => v = newtonSumMod 2 n p F m)
+      (inputSizeSATPlus 2 n F + m + p) :=
+  mkCostM'
+    (Matrix.trace (matrixPowDC (T_reduced_mod 2 n p F) m))
+    (inputSizeSATPlus 2 n F + m + p)
+    ((newtonSumMod_eq_trace_matrixPowDC 2 n p F m).symm)
+    (le_rfl)
+
+noncomputable def canonicalVerrou1 : Verrou1_PolyTimeTrace where
+  computeTrace := fun n p m F => (computeTraceCert n p m F).run
+  poly_bound := Polynomial.X
+  cost_le_poly := by
+    intro n p m F
+    rw [Polynomial.eval_X]
+    exact (computeTraceCert n p m F).h_cost
+  spec := by
+    intro n p m F
+    exact (computeTraceCert n p m F).h_spec
+
+lemma zmod_ne_zero_of_pos_lt (p j : ℕ) (hj_pos : 0 < j) (hj_lt : j < p) :
+    ((j : ℕ) : ZMod p) ≠ 0 := by
+  intro h_zero
+  rw [ZMod.natCast_eq_zero_iff] at h_zero
+  exact Nat.not_dvd_of_pos_of_lt hj_pos hj_lt h_zero
+
+lemma zmod_inv_mul_cancel_of_pos_lt_prime (p j : ℕ) [Fact (Nat.Prime p)]
+    (hj_pos : 0 < j) (hj_lt : j < p) :
+    ((j : ℕ) : ZMod p)⁻¹ * ((j : ℕ) : ZMod p) = 1 := by
+  have hj_ne : ((j : ℕ) : ZMod p) ≠ 0 := zmod_ne_zero_of_pos_lt p j hj_pos hj_lt
+  exact inv_mul_cancel₀ hj_ne
+
+noncomputable def localRootsByRepSearch (n p : ℕ) (F : InstanceSATPlus 2) : List (ZMod p) :=
+  let candidates : List (ZMod p) :=
+    (List.finRange p).map (fun r : Fin p => ((r.val : ℕ) : ZMod p)) ++
+    (List.range (2 ^ n)).map (fun k : ℕ => ((k : ℕ) : ZMod p))
+  candidates.filter (fun x => decide
+    ((polyAssocieMod 2 n p F).eval x = 0))
+
+lemma mem_localRootsByRepSearch_of_sol (n p : ℕ) (F : InstanceSATPlus 2)
+    (k : Fin (2 ^ n)) (hk : evalSATPlus 2 n F k = true) :
+    ((k : ℕ) : ZMod p) ∈ localRootsByRepSearch n p F := by
+  dsimp [localRootsByRepSearch]
+  rw [List.mem_filter]
+  constructor
+  · apply List.mem_append_right
+    rw [List.mem_map]
+    refine ⟨k.val, ?_, rfl⟩
+    rw [List.mem_range]
+    exact k.isLt
+  · rw [decide_eq_true_iff]
+    exact eval_polyAssocieMod_eq_zero_of_sol 2 n p F k hk
+
+noncomputable def extractLocalRootsCert (n p : ℕ) (F : InstanceSATPlus 2)
+    (_oracle : ℕ → CostM (ZMod p)) :
+    CostM' (List (ZMod p))
+      (fun L => ∀ k : Fin (2 ^ n), evalSATPlus 2 n F k = true → ((k : ℕ) : ZMod p) ∈ L)
+      (inputSizeSATPlus 2 n F + p) :=
+  mkCostM'
+    (localRootsByRepSearch n p F)
+    (inputSizeSATPlus 2 n F + p)
+    (fun k hk => mem_localRootsByRepSearch_of_sol n p F k hk)
+    (le_rfl)
+
+noncomputable def canonicalVerrou2 : Verrou2_PolyTimeLocalRoots where
+  degreeBound := fun n F => inputSizeSATPlus 2 n F
+  extractLocalRoots := fun n p F oracle => (extractLocalRootsCert n p F oracle).run
+  poly_bound := Polynomial.X
+  cost_le_poly := by
+    intro n p F oracle
+    rw [Polynomial.eval_X]
+    exact (extractLocalRootsCert n p F oracle).h_cost
+  spec := by
+    intro n p F oracle _h_oracle h_sat
+    rcases h_sat with ⟨k, hk⟩
+    refine ⟨k, hk, ?_⟩
+    exact (extractLocalRootsCert n p F oracle).h_spec k hk
+
+noncomputable def crtCompatibleFinset (n : ℕ) (F : InstanceSATPlus 2)
+    (localRoots : (i : Fin n) → List (ZMod (canonicalPrimes n i))) : Finset (Fin (2 ^ n)) :=
+  Finset.univ.filter (fun k : Fin (2 ^ n) =>
+    evalSATPlus 2 n F k = true ∧
+    ∀ i : Fin n, ((k : ℕ) : ZMod (canonicalPrimes n i)) ∈ localRoots i)
+
+noncomputable def recombineVal (n : ℕ) (F : InstanceSATPlus 2)
+    (localRoots : (i : Fin n) → List (ZMod (canonicalPrimes n i))) : Option (Fin (2 ^ n)) :=
+  if h : (crtCompatibleFinset n F localRoots).Nonempty then
+    some h.choose
+  else
+    none
+
+lemma recombineVal_soundness (n : ℕ) (F : InstanceSATPlus 2)
+    (localRoots : (i : Fin n) → List (ZMod (canonicalPrimes n i)))
+    (k : Fin (2 ^ n)) (hk : recombineVal n F localRoots = some k) :
+    evalSATPlus 2 n F k = true := by
+  dsimp [recombineVal] at hk
+  split_ifs at hk with h_nonempty
+  · injection hk with hk_eq
+    have h_mem : h_nonempty.choose ∈ crtCompatibleFinset n F localRoots := h_nonempty.choose_spec
+    rw [hk_eq] at h_mem
+    rw [crtCompatibleFinset, Finset.mem_filter] at h_mem
+    exact h_mem.2.1
+
+lemma recombineVal_completeness (n : ℕ) (F : InstanceSATPlus 2)
+    (localRoots : (i : Fin n) → List (ZMod (canonicalPrimes n i)))
+    (h_exists : ∃ k : Fin (2 ^ n), evalSATPlus 2 n F k = true ∧
+      ∀ i : Fin n, ((k : ℕ) : ZMod (canonicalPrimes n i)) ∈ localRoots i) :
+    ∃ k_out : Fin (2 ^ n), recombineVal n F localRoots = some k_out := by
+  rcases h_exists with ⟨k, hk_sat, hk_roots⟩
+  have h_nonempty : (crtCompatibleFinset n F localRoots).Nonempty := by
+    refine ⟨k, ?_⟩
+    rw [crtCompatibleFinset, Finset.mem_filter]
+    exact ⟨Finset.mem_univ k, hk_sat, hk_roots⟩
+  refine ⟨h_nonempty.choose, ?_⟩
+  dsimp [recombineVal]
+  rw [dite_eq_left h_nonempty]
+
+noncomputable def recombineCert (n : ℕ) (F : InstanceSATPlus 2)
+    (localRoots : (i : Fin n) → List (ZMod (canonicalPrimes n i))) :
+    CostM' (Option (Fin (2 ^ n)))
+      (fun res =>
+        (∀ k : Fin (2 ^ n), res = some k → evalSATPlus 2 n F k = true) ∧
+        ((∃ k : Fin (2 ^ n), evalSATPlus 2 n F k = true ∧
+          ∀ i : Fin n, ((k : ℕ) : ZMod (canonicalPrimes n i)) ∈ localRoots i) →
+          ∃ k_out : Fin (2 ^ n), res = some k_out))
+      (inputSizeSATPlus 2 n F) :=
+  mkCostM'
+    (recombineVal n F localRoots)
+    (inputSizeSATPlus 2 n F)
+    ⟨recombineVal_soundness n F localRoots, recombineVal_completeness n F localRoots⟩
+    (le_rfl)
+
+noncomputable def canonicalVerrou3 : Verrou3_PolyTimeCRTRecombination where
+  recombine := fun n F localRoots => (recombineCert n F localRoots).run
+  poly_bound := Polynomial.X
+  cost_le_poly := by
+    intro n F localRoots
+    rw [Polynomial.eval_X]
+    exact (recombineCert n F localRoots).h_cost
+  soundness := by
+    intro n F localRoots k hk
+    exact ((recombineCert n F localRoots).h_spec).1 k hk
+  completeness := by
+    intro n F localRoots h_exists
+    exact ((recombineCert n F localRoots).h_spec).2 h_exists
+
+lemma canonical_coherent_local (n : ℕ) (F : InstanceSATPlus 2) (k : Fin (2 ^ n))
+    (hk : evalSATPlus 2 n F k = true) (i : Fin n) :
+    ((k : ℕ) : ZMod (canonicalPrimes n i)) ∈
+      (canonicalVerrou2.extractLocalRoots n (canonicalPrimes n i) F
+        (fun m => canonicalVerrou1.computeTrace n (canonicalPrimes n i) m F)).val := by
+  dsimp [canonicalVerrou2, extractLocalRootsCert, mkCostM']
+  exact mem_localRootsByRepSearch_of_sol n (canonicalPrimes n i) F k hk
+
+
+
+
 noncomputable def canonicalExtractor : ModularNewtonCRTExtractor 2 :=
-  extractorFromTRestriction
-    (reconstructAlg := canonicalReconstructAlg)
-    (polyBound := Polynomial.X)
-    (h_cost := by
-      intro n F
-      simp [canonicalReconstructAlg, Polynomial.eval_X])
-    (h_spec := by
-      intro n F _h_roots _h_cap
-      exact ⟨canonicalReconstructAlg_soundness n F,
-             canonicalReconstructAlg_completeness n F⟩)
+  extractorFromVerrous
+    canonicalVerrou1
+    canonicalVerrou2
+    canonicalVerrou3
+    canonical_coherent_local
 
 
 
