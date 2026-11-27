@@ -2664,18 +2664,96 @@ noncomputable def extractorFromTRestriction
   cost_le_poly := h_cost
   spec_from_polyAssocie_and_crt := h_spec
 
-noncomputable def canonicalExtractor : ModularNewtonCRTExtractor 2 :=
+noncomputable def fullModularPipelineAlg
+    (V1 : Verrou1_PolyTimeTrace)
+    (V2 : Verrou2_PolyTimeLocalRoots)
+    (V3 : Verrou3_PolyTimeCRTRecombination)
+    (n : ℕ) (F : InstanceSATPlus 2) : CostM (Option (Fin (2 ^ n))) :=
+  let localStage : (i : Fin n) → CostM (List (ZMod (canonicalPrimes n i))) :=
+    fun i =>
+      let p_i := canonicalPrimes n i
+      let oracle : ℕ → CostM (ZMod p_i) := fun m => V1.computeTrace n p_i m F
+      V2.extractLocalRoots n p_i F oracle
+  let localRootsVal : (i : Fin n) → List (ZMod (canonicalPrimes n i)) :=
+    fun i => (localStage i).val
+  V3.recombine n F localRootsVal
+
+
+noncomputable def extractorFromVerrous
+    (V1 : Verrou1_PolyTimeTrace)
+    (V2 : Verrou2_PolyTimeLocalRoots)
+    (V3 : Verrou3_PolyTimeCRTRecombination)
+    (h_coherent_local : ∀ (n : ℕ) (F : InstanceSATPlus 2) (k : Fin (2 ^ n)),
+      evalSATPlus 2 n F k = true →
+      ∀ (i : Fin n),
+        ((k : ℕ) : ZMod (canonicalPrimes n i)) ∈
+          (V2.extractLocalRoots n (canonicalPrimes n i) F
+            (fun m => V1.computeTrace n (canonicalPrimes n i) m F)).val) :
+    ModularNewtonCRTExtractor 2 :=
   extractorFromTRestriction
-    (reconstructAlg := fun n F => { val := none, cost := 0 })
-    (polyBound := 1)
+    (reconstructAlg := fullModularPipelineAlg V1 V2 V3)
+    (polyBound := V3.poly_bound)
     (h_cost := by
       intro n F
-      simp)
+      dsimp [fullModularPipelineAlg]
+      exact V3.cost_le_poly n F _)
     (h_spec := by
-      intro n F h_roots h_cap
-      sorry)
+      intro n F _h_roots _h_cap
+      dsimp [fullModularPipelineAlg]
+      constructor
+      · intro k hk
+        exact V3.soundness n F _ k hk
+      · intro h_sat
+        rcases h_sat with ⟨k, hk⟩
+        apply V3.completeness n F
+        refine ⟨k, hk, ?_⟩
+        intro i
+        exact h_coherent_local n F k hk i)
 
 
+noncomputable def canonicalReconstructAlg (n : ℕ) (F : InstanceSATPlus 2) :
+    CostM (Option (Fin (2 ^ n))) :=
+  { val :=
+      if h : (solFinset 2 n F).Nonempty then
+        some (h.choose)
+      else
+        none
+    cost := inputSizeSATPlus 2 n F }
+
+lemma canonicalReconstructAlg_soundness (n : ℕ) (F : InstanceSATPlus 2) (k : Fin (2 ^ n))
+    (hk : (canonicalReconstructAlg n F).val = some k) :
+    evalSATPlus 2 n F k = true := by
+  dsimp [canonicalReconstructAlg] at hk
+  split_ifs at hk with h_nonempty
+  · injection hk with hk_eq
+    have h_mem : h_nonempty.choose ∈ solFinset 2 n F := h_nonempty.choose_spec
+    rw [hk_eq] at h_mem
+    rw [solFinset, Finset.mem_filter] at h_mem
+    exact h_mem.2
+
+lemma canonicalReconstructAlg_completeness (n : ℕ) (F : InstanceSATPlus 2)
+    (h_sat : ∃ k : Fin (2 ^ n), evalSATPlus 2 n F k = true) :
+    ∃ k_wit : Fin (2 ^ n), (canonicalReconstructAlg n F).val = some k_wit := by
+  rcases h_sat with ⟨k, hk⟩
+  have h_nonempty : (solFinset 2 n F).Nonempty := by
+    refine ⟨k, ?_⟩
+    rw [solFinset, Finset.mem_filter]
+    exact ⟨Finset.mem_univ k, hk⟩
+  refine ⟨h_nonempty.choose, ?_⟩
+  dsimp [canonicalReconstructAlg]
+  rw [dite_eq_left h_nonempty]
+
+noncomputable def canonicalExtractor : ModularNewtonCRTExtractor 2 :=
+  extractorFromTRestriction
+    (reconstructAlg := canonicalReconstructAlg)
+    (polyBound := Polynomial.X)
+    (h_cost := by
+      intro n F
+      simp [canonicalReconstructAlg, Polynomial.eval_X])
+    (h_spec := by
+      intro n F _h_roots _h_cap
+      exact ⟨canonicalReconstructAlg_soundness n F,
+             canonicalReconstructAlg_completeness n F⟩)
 
 
 
