@@ -746,7 +746,11 @@ structure Verrou2_PolyTimeLocalRoots where
   poly_bound : Polynomial ℕ
   cost_le_poly : ∀ (n p : ℕ) (F : InstanceSATPlus 2) (oracle : ℕ → CostM (ZMod p)),
     (extractLocalRoots n p F oracle).cost ≤ poly_bound.eval (inputSizeSATPlus 2 n F + p)
-  spec : ∀ (n p : ℕ) (_ : Nat.Prime p) (F : InstanceSATPlus 2) (oracle : ℕ → CostM (ZMod p)),
+  spec : ∀ (n p : ℕ) (_ : Nat.Prime p)
+    (F : InstanceSATPlus 2)
+    (_ : (solFinset 2 n F).card ≤ degreeBound n F)
+    (_ : degreeBound n F < p)
+    (oracle : ℕ → CostM (ZMod p)),
     (∀ m, (oracle m).val = newtonSumMod 2 n p F m) →
     (∃ k : Fin (2 ^ n), evalSATPlus 2 n F k = true) →
     ∃ k : Fin (2 ^ n), evalSATPlus 2 n F k = true ∧
