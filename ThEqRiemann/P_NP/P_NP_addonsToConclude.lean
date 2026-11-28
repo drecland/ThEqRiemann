@@ -215,17 +215,7 @@ theorem polyXPlusOne_eq : polyXPlusOne = Polynomial.X + 1 := by
     | succ k => simp [polyXPlusOne, Polynomial.coeff_X, Polynomial.coeff_one]
 
 
-def effectiveVerrou1 : Verrou1_PolyTimeTrace where
-  computeTrace := fun n p m F => (computeTraceOp n F p m).toCostM
-  poly_bound := polyXPlusOne
-  cost_le_poly := by
-    intro n p m F
-    rw [polyXPlusOne_eq]
-    simp only [Polynomial.eval_add, Polynomial.eval_X, Polynomial.eval_one]
-    exact (computeTraceOp n F p m).h_cost
-  spec := by
-    intro n p m F
-    exact (computeTraceOp n F p m).h_spec
+
 
 def newtonGirardCoeffs (p : ℕ) (d : ℕ)
     (traceOracle : ℕ → ZMod p) : List (ZMod p) :=
@@ -243,8 +233,8 @@ def directNewtonRootsFp (p : ℕ) (d : ℕ) (traceOracle : ℕ → ZMod p) : Lis
   let coeffs := newtonGirardCoeffs p d traceOracle
   (allResiduesFp p).filter (fun x => evalHornerMod p coeffs x == 0)
 
-def extractLocalRootsEffective (p : ℕ) (traceOracle : ℕ → ZMod p) : List (ZMod p) :=
-  directNewtonRootsFp p p traceOracle ++ allResiduesFp p
+def extractLocalRootsEffective (p d : ℕ) (traceOracle : ℕ → ZMod p) : List (ZMod p) :=
+  directNewtonRootsFp p d traceOracle
 
 theorem mem_allResiduesFp (p : ℕ) [Fact (Nat.Prime p)] (x : ZMod p) :
     x ∈ allResiduesFp p := by
@@ -255,14 +245,77 @@ theorem mem_allResiduesFp (p : ℕ) [Fact (Nat.Prime p)] (x : ZMod p) :
   refine ⟨ ⟨ ZMod.val x, ZMod.val_lt x ⟩, ?_ ⟩
   simp only [ZMod.natCast_zmod_val]
 
+def verrou2RealProg (p d : ℕ) (traceOracle : ℕ → ZMod p) : OpTrace (List (ZMod p)) :=
+  OpTrace.seq
+    (OpTrace.mapOp (d + 1)
+      (fun i => ((-1 : ZMod p) ^ i) * newtonGirardElemSymm p traceOracle i)
+      (List.range (d + 1)))
+    (fun coeffs =>
+      OpTrace.filterOp (d + 1)
+        (fun x => evalHornerMod p coeffs x == 0)
+        (allResiduesFp p))
 
-theorem mem_extractLocalRootsEffective (p : ℕ) [Fact (Nat.Prime p)]
+@[simp]
+theorem verrou2RealProg_eval (p d : ℕ) (traceOracle : ℕ → ZMod p) :
+    (verrou2RealProg p d traceOracle).eval = extractLocalRootsEffective p d traceOracle := by
+  unfold verrou2RealProg extractLocalRootsEffective directNewtonRootsFp newtonGirardCoeffs
+  simp only [OpTrace.eval, OpTrace.mapOp_eval, OpTrace.filterOp_eval]
+
+@[simp]
+theorem verrou2RealProg_steps (p d : ℕ) (traceOracle : ℕ → ZMod p) :
+    (verrou2RealProg p d traceOracle).steps = (d + 1) * (d + 1) + p * (d + 1) := by
+  unfold verrou2RealProg
+  simp only [OpTrace.steps, OpTrace.mapOp_eval, OpTrace.mapOp_steps,
+    OpTrace.filterOp_steps, List.length_range, allResiduesFp, List.length_ofFn]
+
+
+def extractRootsOp (p d : ℕ) (traceOracle : ℕ → ZMod p) :
+    CostM' (List (ZMod p))
+      (fun l => l = extractLocalRootsEffective p d traceOracle)
+      ((d + 1) * (d + 1) + p * (d + 1)) :=
+  let prog := verrou2RealProg p d traceOracle
+  { prog := prog
+    run := prog.toCostM
+    h_link := rfl
+    h_spec := by
+      rw [OpTrace.toCostM_val, verrou2RealProg_eval]
+    h_cost := by
+      rw [OpTrace.toCostM_cost, verrou2RealProg_steps] }
+
+theorem mem_directNewtonRootsFp_iff (p d : ℕ) [Fact (Nat.Prime p)]
     (traceOracle : ℕ → ZMod p) (x : ZMod p) :
-    x ∈ extractLocalRootsEffective p traceOracle := by
+    x ∈ directNewtonRootsFp p d traceOracle ↔
+      evalHornerMod p (newtonGirardCoeffs p d traceOracle) x = 0 := by
+  unfold directNewtonRootsFp
+  rw [List.mem_filter, beq_iff_eq]
+  constructor
+  · intro h
+    exact h.2
+  · intro h_zero
+    exact ⟨mem_allResiduesFp p x, h_zero⟩
+
+theorem newtonGirard_horner_annihilates_solution
+    (n p : ℕ) (hp : Nat.Prime p) (F : InstanceSATPlus 2)
+    (traceOracle : ℕ → ZMod p)
+    (h_oracle : ∀ m, traceOracle m = newtonSumMod 2 n p F m)
+    (k : Fin (2 ^ n)) (hk : evalSATPlus 2 n F k = true) :
+    evalHornerMod p (newtonGirardCoeffs p
+      (inputSizeSATPlus 2 n F) traceOracle) ((k : ℕ) : ZMod p) = 0 := by
+  -- Pont algébrique entre la récurrence de Newton-Girard (`newtonGirardElemSymm`)
+  -- sur les sommes de puissances `newtonSumMod 2 n p F m` et la factorisation
+  -- du polynôme générateur $\prod_{s \in \mathcal{S}} (X - s) \pmod p$.
+  sorry
+
+
+
+
+theorem mem_extractLocalRootsEffective_iff (p d : ℕ) [Fact (Nat.Prime p)]
+    (traceOracle : ℕ → ZMod p) (x : ZMod p) :
+    x ∈ extractLocalRootsEffective p d traceOracle ↔
+      evalHornerMod p (newtonGirardCoeffs p d traceOracle) x = 0 := by
   unfold extractLocalRootsEffective
-  rw [List.mem_append]
-  right
-  exact mem_allResiduesFp p x
+  exact mem_directNewtonRootsFp_iff p d traceOracle x
+
 
 def verrou2OpTrace (p : ℕ) : OpTrace Unit :=
   OpTrace.seq
@@ -276,21 +329,6 @@ theorem verrou2OpTrace_steps (p : ℕ) :
   unfold verrou2OpTrace
   simp only [OpTrace.steps, OpTrace.loop_steps]
 
-def extractRootsOp (p : ℕ) (traceOracle : ℕ → ZMod p) :
-    CostM' (List (ZMod p))
-      (fun l => l = extractLocalRootsEffective p traceOracle)
-      ((p + 1) * (p + 1) + p * (p + 1)) :=
-  let prog : OpTrace (List (ZMod p)) :=
-    OpTrace.seq (verrou2OpTrace p) (fun _ => OpTrace.ret (extractLocalRootsEffective p traceOracle))
-  { prog := prog
-    run := prog.toCostM
-    h_link := rfl
-    h_spec := by
-      rw [OpTrace.toCostM_val]
-      rfl
-    h_cost := by
-      rw [OpTrace.toCostM_cost]
-      simp [prog, OpTrace.steps, verrou2OpTrace_steps] }
 
 theorem verrou2_poly_bound (S p : ℕ) :
     (p + 1) * (p + 1) + p * (p + 1) ≤ 2 * (S + p + 1) ^ 2 := by
@@ -337,28 +375,7 @@ theorem polyVerrou2_eq :
     simp [polyVerrou2, Polynomial.coeff_X_pow,
       Polynomial.coeff_X, Polynomial.coeff_one]
 
-def effectiveVerrou2 : Verrou2_PolyTimeLocalRoots where
-  degreeBound := fun n F => inputSizeSATPlus 2 n F
-  extractLocalRoots := fun _ p _ oracle =>
-    (extractRootsOp p (fun m => (oracle m).val)).run
-  poly_bound := polyVerrou2
-  cost_le_poly := by
-    intro n p F oracle
-    rw [polyVerrou2_eq]
-    simp only [Polynomial.eval_add, Polynomial.eval_mul, Polynomial.eval_C,
-      Polynomial.eval_pow, Polynomial.eval_X, Polynomial.eval_one]
-    have hcost := (extractRootsOp p (fun m => (oracle m).val)).h_cost
-    have hp : p ≤ inputSizeSATPlus 2 n F + p := Nat.le_add_left p _
-    nlinarith
-  spec := by
-    intro n p hp F oracle _ hsat
-    have _ : Fact (Nat.Prime p) := ⟨hp⟩
-    rcases hsat with ⟨k, hk⟩
-    refine ⟨k, hk, ?_⟩
-    have hval := (extractRootsOp p (fun m => (oracle m).val)).h_spec
-    rw [hval]
-    exact mem_extractLocalRootsEffective
-      p (fun m => (oracle m).val) ((k : ℕ) : ZMod p)
+
 
 
 def headResidue {n : ℕ} (primes : Fin n → ℕ)
@@ -389,6 +406,153 @@ def garnerCRTCandidate {n : ℕ} (primes : Fin n → ℕ)
     some ⟨X, h⟩
   else
     none
+
+def recombineCRTEffective {n : ℕ} (primes : Fin n → ℕ) (F : InstanceSATPlus 2)
+    (localRoots : (i : Fin n) → List (ZMod (primes i))) : Option (Fin (2 ^ n)) :=
+  match garnerCRTCandidate primes localRoots with
+  | some k_crt =>
+      if evalSATPlus 2 n F k_crt = true then
+        some k_crt
+      else
+        none
+  | none => none
+
+
+def verrou3RealProg {n : ℕ} (primes : Fin n → ℕ) (F : InstanceSATPlus 2)
+    (localRoots : (i : Fin n) → List (ZMod (primes i))) : OpTrace (Option (Fin (2 ^ n))) :=
+  OpTrace.seq
+    (OpTrace.foldlOp 1
+      (fun (st : ℕ × ℕ) (i : Fin n) =>
+        crtCombinePair st.2 (primes i) st.1 (headResidue primes localRoots i))
+      (0, 1)
+      (List.ofFn (fun i : Fin n => i)))
+    (fun finalState =>
+      let X := finalState.1
+      if h : X < 2 ^ n then
+        let k_crt : Fin (2 ^ n) := ⟨X, h⟩
+        OpTrace.seq
+          (evalSATPlusOp 2 n F k_crt).prog
+          (fun b => OpTrace.ret (if b = true then some k_crt else none))
+      else
+        OpTrace.prim (inputSizeSATPlus 2 n F + 1) none)
+
+@[simp]
+theorem verrou3RealProg_eval {n : ℕ} (primes : Fin n → ℕ) (F : InstanceSATPlus 2)
+    (localRoots : (i : Fin n) → List (ZMod (primes i))) :
+    (verrou3RealProg primes F localRoots).eval = recombineCRTEffective primes F localRoots := by
+  unfold verrou3RealProg recombineCRTEffective garnerCRTCandidate garnerCRTReconstructNat
+  simp only [OpTrace.eval, OpTrace.foldlOp_eval]
+  split
+  · rename_i h_lt
+    dsimp [OpTrace.eval]
+    have h_eval_sat : ∀ x : Fin (2 ^ n),
+        (evalSATPlusOp 2 n F x).prog.eval = evalSATPlus 2 n F x := fun x => by
+      rw [← (CostM'.val_and_cost_linked (evalSATPlusOp 2 n F x)).1]
+      exact (evalSATPlusOp 2 n F x).h_spec
+    rw [h_eval_sat]
+    have h_cand : ∀ (h : (OpTrace.foldlOp 1
+        (fun st i => crtCombinePair st.2 (primes i) st.1 (headResidue primes localRoots i))
+        (0, 1) (List.ofFn fun i => i)).eval.1 < 2 ^ n),
+        (⟨_, h⟩ : Fin (2 ^ n)) = ⟨_, h_lt⟩ := fun h => by
+      ext
+      simp only [OpTrace.foldlOp_eval]
+    rw [h_cand]
+  · rfl
+
+@[simp]
+theorem verrou3RealProg_steps {n : ℕ} (primes : Fin n → ℕ) (F : InstanceSATPlus 2)
+    (localRoots : (i : Fin n) → List (ZMod (primes i))) :
+    (verrou3RealProg primes F localRoots).steps = inputSizeSATPlus 2 n F + n + 1 := by
+  unfold verrou3RealProg
+  simp only [OpTrace.steps, OpTrace.foldlOp_eval,
+    OpTrace.foldlOp_steps, List.length_ofFn, Nat.mul_one]
+  split
+  · rename_i h_lt
+    dsimp [OpTrace.steps, evalSATPlusOp]
+    rw [OpTrace.loop_steps, Nat.mul_one]
+    omega
+  · dsimp [OpTrace.steps]
+    omega
+
+def recombineCRTOp {n : ℕ} (primes : Fin n → ℕ) (F : InstanceSATPlus 2)
+    (localRoots : (i : Fin n) → List (ZMod (primes i))) :
+    CostM' (Option (Fin (2 ^ n)))
+      (fun r => r = recombineCRTEffective primes F localRoots)
+      (inputSizeSATPlus 2 n F + n + 1) :=
+  let prog := verrou3RealProg primes F localRoots
+  { prog := prog
+    run := prog.toCostM
+    h_link := rfl
+    h_spec := by
+      rw [OpTrace.toCostM_val, verrou3RealProg_eval]
+    h_cost := by
+      rw [OpTrace.toCostM_cost, verrou3RealProg_steps] }
+
+
+theorem recombineCRTEffective_soundness {n : ℕ} (primes : Fin n → ℕ) (F : InstanceSATPlus 2)
+    (localRoots : (i : Fin n) → List (ZMod (primes i)))
+    (k : Fin (2 ^ n))
+    (h_res : recombineCRTEffective primes F localRoots = some k) :
+    evalSATPlus 2 n F k = true := by
+  unfold recombineCRTEffective at h_res
+  split at h_res
+  · rename_i k_crt h_garner
+    by_cases h_eval : evalSATPlus 2 n F k_crt = true
+    · rw [ite_eq_left h_eval] at h_res
+      injection h_res with h_eq
+      rw [← h_eq]
+      exact h_eval
+    · rw [ite_eq_right h_eval] at h_res
+      contradiction
+  · contradiction
+
+theorem garnerCRTCandidate_completeness (n : ℕ) (F : InstanceSATPlus 2)
+    (localRoots : (i : Fin n) → List (ZMod (canonicalPrimes n i)))
+    (h_sat : ∃ k : Fin (2 ^ n), evalSATPlus 2 n F k = true ∧
+      ∀ i : Fin n, ((k : ℕ) : ZMod (canonicalPrimes n i)) ∈ localRoots i) :
+    ∃ k_crt : Fin (2 ^ n),
+      garnerCRTCandidate (canonicalPrimes n) localRoots = some k_crt ∧
+      evalSATPlus 2 n F k_crt = true := by
+  -- Pont arithmétique (Théorème des Restes Chinois itéré sur `canonicalPrimes n`
+  -- et cohérence du résidu extrait `headResidue`).
+  sorry
+
+theorem recombineCRTEffective_completeness (n : ℕ) (F : InstanceSATPlus 2)
+    (localRoots : (i : Fin n) → List (ZMod (canonicalPrimes n i)))
+    (h_sat : ∃ k : Fin (2 ^ n), evalSATPlus 2 n F k = true ∧
+      ∀ i : Fin n, ((k : ℕ) : ZMod (canonicalPrimes n i)) ∈ localRoots i) :
+    ∃ k_out : Fin (2 ^ n),
+      recombineCRTEffective (canonicalPrimes n) F localRoots = some k_out := by
+  rcases garnerCRTCandidate_completeness n F localRoots h_sat with ⟨k_crt, h_garner, h_eval⟩
+  refine ⟨k_crt, ?_⟩
+  unfold recombineCRTEffective
+  simp [h_garner, h_eval]
+
+
+noncomputable def effectiveVerrou3 : Verrou3_PolyTimeCRTRecombination where
+  recombine := fun n F localRoots =>
+    (recombineCRTOp (canonicalPrimes n) F localRoots).run
+  poly_bound := Polynomial.C 2 * Polynomial.X + 1
+  cost_le_poly := by
+    intro n F localRoots
+    simp only [Polynomial.eval_add, Polynomial.eval_mul, Polynomial.eval_C,
+      Polynomial.eval_X, Polynomial.eval_one]
+    have hcost := (recombineCRTOp (canonicalPrimes n) F localRoots).h_cost
+    have hn : n ≤ inputSizeSATPlus 2 n F := by
+      unfold inputSizeSATPlus
+      omega
+    omega
+  soundness := by
+    intro n F localRoots k h_res
+    have hval := (recombineCRTOp (canonicalPrimes n) F localRoots).h_spec
+    rw [hval] at h_res
+    exact recombineCRTEffective_soundness (canonicalPrimes n) F localRoots k h_res
+  completeness := by
+    intro n F localRoots h_sat
+    have hval := (recombineCRTOp (canonicalPrimes n) F localRoots).h_spec
+    rw [hval]
+    exact recombineCRTEffective_completeness n F localRoots h_sat
+
 
 def isCRTCompatible {n : ℕ} (primes : Fin n → ℕ)
     (localRoots : (i : Fin n) → List (ZMod (primes i)))
@@ -421,81 +585,7 @@ def isValidCRTCandidate {n : ℕ} (primes : Fin n → ℕ) (F : InstanceSATPlus 
 def allFinCandidates (n : ℕ) : List (Fin (2 ^ n)) :=
   List.ofFn (fun k : Fin (2 ^ n) => k)
 
-def recombineCRTEffective {n : ℕ} (primes : Fin n → ℕ) (F : InstanceSATPlus 2)
-    (localRoots : (i : Fin n) → List (ZMod (primes i))) : Option (Fin (2 ^ n)) :=
-  match garnerCRTCandidate primes localRoots with
-  | some k_crt =>
-      if evalSATPlus 2 n F k_crt = true then
-        some k_crt
-      else
-        (allFinCandidates n).find?
-          (fun k => isValidCRTCandidate primes F localRoots k)
-  | none =>
-      (allFinCandidates n).find?
-        (fun k => isValidCRTCandidate primes F localRoots k)
 
-theorem recombineCRTEffective_soundness {n : ℕ} (primes : Fin n → ℕ) (F : InstanceSATPlus 2)
-    (localRoots : (i : Fin n) → List (ZMod (primes i)))
-    (k : Fin (2 ^ n))
-    (h_res : recombineCRTEffective primes F localRoots = some k) :
-    evalSATPlus 2 n F k = true := by
-  unfold recombineCRTEffective at h_res
-  split at h_res
-  · rename_i k_crt h_garner
-    by_cases h_eval : evalSATPlus 2 n F k_crt = true
-    · rw [ite_eq_left h_eval] at h_res
-      injection h_res with h_eq
-      rw [← h_eq]
-      exact h_eval
-    · rw [ite_eq_right h_eval] at h_res
-      have h_find := List.find?_some h_res
-      unfold isValidCRTCandidate at h_find
-      rw [Bool.and_eq_true] at h_find
-      exact h_find.2
-  · have h_find := List.find?_some h_res
-    unfold isValidCRTCandidate at h_find
-    rw [Bool.and_eq_true] at h_find
-    exact h_find.2
-
-theorem recombineCRTEffective_completeness {n : ℕ} (primes : Fin n → ℕ) (F : InstanceSATPlus 2)
-    (localRoots : (i : Fin n) → List (ZMod (primes i)))
-    (h_roots : ∀ i : Fin n, ∀ k : Fin (2 ^ n), evalSATPlus 2 n F k = true →
-      (k.val : ZMod (primes i)) ∈ localRoots i)
-    (h_sat : ∃ k : Fin (2 ^ n), evalSATPlus 2 n F k = true) :
-    ∃ k : Fin (2 ^ n), recombineCRTEffective primes F localRoots = some k := by
-  rcases h_sat with ⟨k₀, hk₀⟩
-  have hk₀_mem : k₀ ∈ allFinCandidates n := by
-    unfold allFinCandidates
-    rw [List.mem_ofFn]
-    exact ⟨k₀, rfl⟩
-  have hk₀_compat : isCRTCompatible primes localRoots k₀ = true := by
-    rw [isCRTCompatible_iff]
-    intro i
-    exact h_roots i k₀ hk₀
-  have hk₀_valid : isValidCRTCandidate primes F localRoots k₀ = true := by
-    unfold isValidCRTCandidate
-    rw [Bool.and_eq_true]
-    exact ⟨hk₀_compat, hk₀⟩
-  have h_find_isSome :
-      ∃ k : Fin (2 ^ n),
-        (allFinCandidates n).find? (fun x =>
-          isValidCRTCandidate primes F localRoots x) = some k := by
-    cases h_f : (allFinCandidates n).find?
-      (fun x => isValidCRTCandidate primes F localRoots x) with
-    | some k => exact ⟨k, rfl⟩
-    | none =>
-      rw [List.find?_eq_none] at h_f
-      have h_absurd := h_f k₀ hk₀_mem
-      exact False.elim (h_absurd hk₀_valid)
-  unfold recombineCRTEffective
-  split
-  · rename_i k_crt h_garner
-    by_cases h_eval : evalSATPlus 2 n F k_crt = true
-    · rw [ite_eq_left h_eval]
-      exact ⟨k_crt, rfl⟩
-    · rw [ite_eq_right h_eval]
-      exact h_find_isSome
-  · exact h_find_isSome
 
 
 
@@ -510,73 +600,50 @@ theorem verrou3OpTrace_steps (n : ℕ) (F : InstanceSATPlus 2) (res : Option (Fi
   dsimp [OpTrace.steps]
   omega
 
-def recombineCRTOp {n : ℕ} (primes : Fin n → ℕ) (F : InstanceSATPlus 2)
-    (localRoots : (i : Fin n) → List (ZMod (primes i))) :
-    CostM' (Option (Fin (2 ^ n)))
-      (fun r => r = recombineCRTEffective primes F localRoots)
-      (inputSizeSATPlus 2 n F + n + 1) where
-  prog := verrou3OpTrace n F (recombineCRTEffective primes F localRoots)
-  run := (verrou3OpTrace n F (recombineCRTEffective primes F localRoots)).toCostM
-  h_link := rfl
-  h_spec := rfl
-  h_cost := by
-    dsimp [verrou3OpTrace, OpTrace.toCostM]
-    omega
 
-noncomputable def effectiveVerrou3 : Verrou3_PolyTimeCRTRecombination where
-  recombine := fun n F localRoots =>
-    (recombineCRTOp (canonicalPrimes n) F localRoots).run
-  poly_bound := Polynomial.C 2 * Polynomial.X + 1
+
+
+
+
+def effectiveVerrou1 : Verrou1_PolyTimeTrace where
+  computeTrace := fun n p m F => (computeTraceOp n F p m).toCostM
+  prog := fun n p m F => (computeTraceOp n F p m).prog
+  h_link := fun n p m F => (computeTraceOp n F p m).h_link
+  poly_bound := polyXPlusOne
   cost_le_poly := by
-    intro n F localRoots
+    intro n p m F
+    rw [polyXPlusOne_eq]
+    simp only [Polynomial.eval_add, Polynomial.eval_X, Polynomial.eval_one]
+    exact (computeTraceOp n F p m).h_cost
+  spec := by
+    intro n p m F
+    exact (computeTraceOp n F p m).h_spec
+
+def effectiveVerrou2 : Verrou2_PolyTimeLocalRoots where
+  degreeBound := fun n F => inputSizeSATPlus 2 n F
+  extractLocalRoots := fun n p F oracle =>
+    (extractRootsOp p (inputSizeSATPlus 2 n F) (fun m => (oracle m).val)).run
+  poly_bound := polyVerrou2
+  cost_le_poly := by
+    intro n p F oracle
+    rw [polyVerrou2_eq]
     simp only [Polynomial.eval_add, Polynomial.eval_mul, Polynomial.eval_C,
-      Polynomial.eval_X, Polynomial.eval_one]
-    have hcost := (recombineCRTOp (canonicalPrimes n) F localRoots).h_cost
-    have hn : n ≤ inputSizeSATPlus 2 n F := by
-      unfold inputSizeSATPlus
-      omega
-    omega
-  soundness := by
-    intro n F localRoots k h_res
-    have hval := (recombineCRTOp (canonicalPrimes n) F localRoots).h_spec
-    rw [hval] at h_res
-    exact recombineCRTEffective_soundness (canonicalPrimes n) F localRoots k h_res
-  completeness := by
-    intro n F localRoots ⟨k₀, hk₀, hk₀_roots⟩
-    have hval := (recombineCRTOp (canonicalPrimes n) F localRoots).h_spec
+      Polynomial.eval_pow, Polynomial.eval_X, Polynomial.eval_one]
+    have hcost := (extractRootsOp p (inputSizeSATPlus 2 n F) (fun m => (oracle m).val)).h_cost
+    set S := inputSizeSATPlus 2 n F
+    nlinarith
+  spec := by
+    intro n p hp F oracle h_oracle hsat
+    have _ : Fact (Nat.Prime p) := ⟨hp⟩
+    rcases hsat with ⟨k, hk⟩
+    refine ⟨k, hk, ?_⟩
+    have hval := (extractRootsOp p (inputSizeSATPlus 2 n F) (fun m => (oracle m).val)).h_spec
     rw [hval]
-    have hk₀_mem : k₀ ∈ allFinCandidates n := by
-      unfold allFinCandidates
-      rw [List.mem_ofFn]
-      exact ⟨k₀, rfl⟩
-    have hk₀_compat : isCRTCompatible (canonicalPrimes n) localRoots k₀ = true := by
-      rw [isCRTCompatible_iff]
-      exact hk₀_roots
-    have hk₀_valid : isValidCRTCandidate (canonicalPrimes n) F localRoots k₀ = true := by
-      unfold isValidCRTCandidate
-      rw [Bool.and_eq_true]
-      exact ⟨hk₀_compat, hk₀⟩
-    have h_find_isSome :
-        ∃ k : Fin (2 ^ n),
-          (allFinCandidates n).find? (fun x =>
-            isValidCRTCandidate (canonicalPrimes n)
-              F localRoots x) = some k := by
-      cases h_f : (allFinCandidates n).find?
-        (fun x => isValidCRTCandidate (canonicalPrimes n)
-          F localRoots x) with
-      | some k => exact ⟨k, rfl⟩
-      | none =>
-        rw [List.find?_eq_none] at h_f
-        exact False.elim (h_f k₀ hk₀_mem hk₀_valid)
-    unfold recombineCRTEffective
-    split
-    · rename_i k_crt _
-      by_cases h_eval : evalSATPlus 2 n F k_crt = true
-      · rw [ite_eq_left h_eval]
-        exact ⟨k_crt, rfl⟩
-      · rw [ite_eq_right h_eval]
-        exact h_find_isSome
-    · exact h_find_isSome
+    unfold extractLocalRootsEffective
+    rw [mem_directNewtonRootsFp_iff]
+    exact newtonGirard_horner_annihilates_solution n p hp F (fun m => (oracle m).val) h_oracle k hk
+
+
 
 
 
@@ -601,9 +668,9 @@ def effectiveTraceRangeOp (n : ℕ) (F : InstanceSATPlus 2) (p k : ℕ) :
 
 def effectivePrimeStepOp (n p : ℕ) (F : InstanceSATPlus 2) :
     CostM' (List (ZMod p))
-      (fun L => L = extractLocalRootsEffective p (fun m => computeTraceEffective 2 n p F m))
+      (fun L => L = extractLocalRootsEffective p p (fun m => computeTraceEffective 2 n p F m))
       ((p + 1) * (p + 1) + p * (p + 1)) :=
-  extractRootsOp p (fun m => computeTraceEffective 2 n p F m)
+  extractRootsOp p p (fun m => computeTraceEffective 2 n p F m)
 
 def effectiveCollectPrimesOp (n : ℕ)
   (_ : Fin n → ℕ) (_ : InstanceSATPlus 2)

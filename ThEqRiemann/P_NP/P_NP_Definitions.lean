@@ -453,48 +453,6 @@ noncomputable def canonicalPrimes (n : ℕ) (i : Fin n) : ℕ :=
 -------------------------------------------------------------------------
 
 
-structure Verrou1_PolyTimeTrace where
-  computeTrace : (n p m : ℕ) → (F : InstanceSATPlus 2) → CostM (ZMod p)
-  poly_bound : Polynomial ℕ
-  cost_le_poly : ∀ (n p m : ℕ) (F : InstanceSATPlus 2),
-    (computeTrace n p m F).cost ≤ poly_bound.eval (inputSizeSATPlus 2 n F + m + p)
-  spec : ∀ (n p m : ℕ) (F : InstanceSATPlus 2),
-    (computeTrace n p m F).val = newtonSumMod 2 n p F m
-
-structure Verrou2_PolyTimeLocalRoots where
-  degreeBound : ℕ → InstanceSATPlus 2 → ℕ
-  extractLocalRoots :
-    (n p : ℕ) → (F : InstanceSATPlus 2) →
-    (traceOracle : ℕ → CostM (ZMod p)) →
-    CostM (List (ZMod p))
-  poly_bound : Polynomial ℕ
-  cost_le_poly : ∀ (n p : ℕ) (F : InstanceSATPlus 2) (oracle : ℕ → CostM (ZMod p)),
-    (extractLocalRoots n p F oracle).cost ≤ poly_bound.eval (inputSizeSATPlus 2 n F + p)
-  spec : ∀ (n p : ℕ) (_ : Nat.Prime p) (F : InstanceSATPlus 2) (oracle : ℕ → CostM (ZMod p)),
-    (∀ m, (oracle m).val = newtonSumMod 2 n p F m) →
-    (∃ k : Fin (2 ^ n), evalSATPlus 2 n F k = true) →
-    ∃ k : Fin (2 ^ n), evalSATPlus 2 n F k = true ∧
-      ((k : ℕ) : ZMod p) ∈ (extractLocalRoots n p F oracle).val
-
-structure Verrou3_PolyTimeCRTRecombination where
-  recombine :
-    (n : ℕ) → (F : InstanceSATPlus 2) →
-    (localRoots : (i : Fin n) → List (ZMod (canonicalPrimes n i))) →
-    CostM (Option (Fin (2 ^ n)))
-  poly_bound : Polynomial ℕ
-  cost_le_poly : ∀ (n : ℕ) (F : InstanceSATPlus 2)
-  (localRoots : (i : Fin n) → List (ZMod (canonicalPrimes n i))),
-    (recombine n F localRoots).cost ≤ poly_bound.eval (inputSizeSATPlus 2 n F)
-  soundness : ∀ (n : ℕ) (F : InstanceSATPlus 2)
-  (localRoots : (i : Fin n) → List (ZMod (canonicalPrimes n i)))
-    (k : Fin (2 ^ n)),
-    (recombine n F localRoots).val = some k → evalSATPlus 2 n F k = true
-  completeness : ∀ (n : ℕ) (F : InstanceSATPlus 2)
-  (localRoots : (i : Fin n) → List (ZMod (canonicalPrimes n i))),
-    (∃ k : Fin (2 ^ n), evalSATPlus 2 n F k = true ∧
-      ∀ i : Fin n, ((k : ℕ) : ZMod (canonicalPrimes n i)) ∈ localRoots i) →
-    ∃ k_out : Fin (2 ^ n), (recombine n F localRoots).val = some k_out
-
 
 noncomputable def blockNewtonSumMod (Q n p : ℕ) (F : InstanceSATPlus Q)
     (m start len : ℕ) : ZMod p :=
@@ -568,21 +526,6 @@ def traceAlgFromTRestriction
     cost := costVal }
 
 
-noncomputable def fullModularPipelineAlg
-    (V1 : Verrou1_PolyTimeTrace)
-    (V2 : Verrou2_PolyTimeLocalRoots)
-    (V3 : Verrou3_PolyTimeCRTRecombination)
-    (n : ℕ) (F : InstanceSATPlus 2) : CostM (Option (Fin (2 ^ n))) :=
-  let localStage : (i : Fin n) → CostM (List (ZMod (canonicalPrimes n i))) :=
-    fun i =>
-      let p_i := canonicalPrimes n i
-      let oracle : ℕ → CostM (ZMod p_i) := fun m => V1.computeTrace n p_i m F
-      V2.extractLocalRoots n p_i F oracle
-  let localRootsVal : (i : Fin n) → List (ZMod (canonicalPrimes n i)) :=
-    fun i => (localStage i).val
-  V3.recombine n F localRootsVal
-
-
 
 
 noncomputable def canonicalReconstructAlg (n : ℕ) (F : InstanceSATPlus 2) :
@@ -593,6 +536,17 @@ noncomputable def canonicalReconstructAlg (n : ℕ) (F : InstanceSATPlus 2) :
       else
         none
     cost := inputSizeSATPlus 2 n F }
+
+def clauseStepWeight (Q p : ℕ) (acc : ZMod p) (C : ClauseSATPlus Q) : ZMod p :=
+  C.foldl (fun s lit => s + (lit.1 : ZMod p) + (lit.2.val : ZMod p)) acc
+
+
+
+
+def computeTraceEffective (Q n p : ℕ) [NeZero Q]
+    (F : InstanceSATPlus Q) (m : ℕ) : ZMod p :=
+  Matrix.trace (M_m_SAT_mod Q n p F m)
+
 
 
 inductive OpTrace : Type → Type 1 where
@@ -638,7 +592,46 @@ lemma toCostM_cost {α : Type} (p : OpTrace α) :
     dsimp [toCostM, steps, CostM.bind]
     rw [ih_m, ih_f, toCostM_val]
 
+
+
 end OpTrace
+
+def OpTrace.foldlOp {α β : Type} (stepCost : ℕ) (f : α → β → α) (init : α) : List β → OpTrace α
+  | [] => OpTrace.ret init
+  | x :: xs =>
+      OpTrace.seq (OpTrace.prim stepCost (f init x)) (fun acc' =>
+        OpTrace.foldlOp stepCost f acc' xs)
+
+
+@[simp]
+theorem OpTrace.foldlOp_eval {α β : Type} (stepCost : ℕ) (f : α → β → α) (init : α) (xs : List β) :
+    (OpTrace.foldlOp stepCost f init xs).eval = xs.foldl f init := by
+  induction xs generalizing init with
+  | nil => rfl
+  | cons x xs ih =>
+    dsimp [OpTrace.foldlOp, OpTrace.eval, List.foldl]
+    exact ih (f init x)
+
+@[simp]
+theorem OpTrace.foldlOp_steps {α β : Type} (stepCost : ℕ) (f : α → β → α) (init : α) (xs : List β) :
+    (OpTrace.foldlOp stepCost f init xs).steps = xs.length * stepCost := by
+  induction xs generalizing init with
+  | nil =>
+    simp [OpTrace.foldlOp, OpTrace.steps]
+  | cons x xs ih =>
+    dsimp [OpTrace.foldlOp, OpTrace.steps, OpTrace.eval, List.length]
+    rw [ih (f init x)]
+    ring
+
+
+
+theorem computeTraceEffective_eq_newtonSumMod (Q n p : ℕ) [NeZero Q]
+    (F : InstanceSATPlus Q) (m : ℕ) :
+    computeTraceEffective Q n p F m = newtonSumMod Q n p F m := by
+  unfold computeTraceEffective M_m_SAT_mod T_SAT_mod M0_SAT_mod newtonSumMod solFinset
+  rw [Matrix.diagonal_pow, Matrix.diagonal_mul_diagonal, Matrix.trace_diagonal]
+  simp only [Pi.pow_apply, mul_ite, mul_one, mul_zero]
+  rw [← Finset.sum_filter]
 
 
 
@@ -719,9 +712,147 @@ def weakenBound {α : Type} {Spec : α → Prop} {b₁ b₂ : ℕ}
   h_cost := le_trans c.h_cost h_le
 
 
-
-
 end CostM'
+
+def CostM'.foldlCert {α β : Type} (stepCost : ℕ) (f : α → β → α) (init : α) (xs : List β) :
+    CostM' α (fun res => res = xs.foldl f init) (xs.length * stepCost) :=
+  let p := OpTrace.foldlOp stepCost f init xs
+  { prog := p
+    run := p.toCostM
+    h_link := rfl
+    h_spec := by
+      rw [OpTrace.toCostM_val, OpTrace.foldlOp_eval]
+    h_cost := by
+      rw [OpTrace.toCostM_cost, OpTrace.foldlOp_steps] }
+
+
+structure Verrou1_PolyTimeTrace where
+  prog : (n p m : ℕ) → (F : InstanceSATPlus 2) → OpTrace (ZMod p)
+  computeTrace : (n p m : ℕ) → (F : InstanceSATPlus 2) → CostM (ZMod p)
+  h_link : ∀ (n p m : ℕ) (F : InstanceSATPlus 2),
+    computeTrace n p m F = (prog n p m F).toCostM
+  poly_bound : Polynomial ℕ
+  cost_le_poly : ∀ (n p m : ℕ) (F : InstanceSATPlus 2),
+    (computeTrace n p m F).cost ≤ poly_bound.eval (inputSizeSATPlus 2 n F + m + p)
+  spec : ∀ (n p m : ℕ) (F : InstanceSATPlus 2),
+    (computeTrace n p m F).val = newtonSumMod 2 n p F m
+
+structure Verrou2_PolyTimeLocalRoots where
+  degreeBound : ℕ → InstanceSATPlus 2 → ℕ
+  extractLocalRoots :
+    (n p : ℕ) → (F : InstanceSATPlus 2) →
+    (traceOracle : ℕ → CostM (ZMod p)) →
+    CostM (List (ZMod p))
+  poly_bound : Polynomial ℕ
+  cost_le_poly : ∀ (n p : ℕ) (F : InstanceSATPlus 2) (oracle : ℕ → CostM (ZMod p)),
+    (extractLocalRoots n p F oracle).cost ≤ poly_bound.eval (inputSizeSATPlus 2 n F + p)
+  spec : ∀ (n p : ℕ) (_ : Nat.Prime p) (F : InstanceSATPlus 2) (oracle : ℕ → CostM (ZMod p)),
+    (∀ m, (oracle m).val = newtonSumMod 2 n p F m) →
+    (∃ k : Fin (2 ^ n), evalSATPlus 2 n F k = true) →
+    ∃ k : Fin (2 ^ n), evalSATPlus 2 n F k = true ∧
+      ((k : ℕ) : ZMod p) ∈ (extractLocalRoots n p F oracle).val
+
+structure Verrou3_PolyTimeCRTRecombination where
+  recombine :
+    (n : ℕ) → (F : InstanceSATPlus 2) →
+    (localRoots : (i : Fin n) → List (ZMod (canonicalPrimes n i))) →
+    CostM (Option (Fin (2 ^ n)))
+  poly_bound : Polynomial ℕ
+  cost_le_poly : ∀ (n : ℕ) (F : InstanceSATPlus 2)
+  (localRoots : (i : Fin n) → List (ZMod (canonicalPrimes n i))),
+    (recombine n F localRoots).cost ≤ poly_bound.eval (inputSizeSATPlus 2 n F)
+  soundness : ∀ (n : ℕ) (F : InstanceSATPlus 2)
+  (localRoots : (i : Fin n) → List (ZMod (canonicalPrimes n i)))
+    (k : Fin (2 ^ n)),
+    (recombine n F localRoots).val = some k → evalSATPlus 2 n F k = true
+  completeness : ∀ (n : ℕ) (F : InstanceSATPlus 2)
+  (localRoots : (i : Fin n) → List (ZMod (canonicalPrimes n i))),
+    (∃ k : Fin (2 ^ n), evalSATPlus 2 n F k = true ∧
+      ∀ i : Fin n, ((k : ℕ) : ZMod (canonicalPrimes n i)) ∈ localRoots i) →
+    ∃ k_out : Fin (2 ^ n), (recombine n F localRoots).val = some k_out
+
+
+noncomputable def fullModularPipelineAlg
+    (V1 : Verrou1_PolyTimeTrace)
+    (V2 : Verrou2_PolyTimeLocalRoots)
+    (V3 : Verrou3_PolyTimeCRTRecombination)
+    (n : ℕ) (F : InstanceSATPlus 2) : CostM (Option (Fin (2 ^ n))) :=
+  let localStage : (i : Fin n) → CostM (List (ZMod (canonicalPrimes n i))) :=
+    fun i =>
+      let p_i := canonicalPrimes n i
+      let oracle : ℕ → CostM (ZMod p_i) := fun m => V1.computeTrace n p_i m F
+      V2.extractLocalRoots n p_i F oracle
+  let localRootsVal : (i : Fin n) → List (ZMod (canonicalPrimes n i)) :=
+    fun i => (localStage i).val
+  V3.recombine n F localRootsVal
+
+
+def computeTraceOp (V1 : Verrou1_PolyTimeTrace)
+    (n : ℕ) (F : InstanceSATPlus 2) (p m : ℕ) :
+    CostM' (ZMod p) (fun v => v = newtonSumMod 2 n p F m)
+      (V1.poly_bound.eval (inputSizeSATPlus 2 n F + m + p)) :=
+  { prog := V1.prog n p m F
+    run := V1.computeTrace n p m F
+    h_link := V1.h_link n p m F
+    h_spec := V1.spec n p m F
+    h_cost := V1.cost_le_poly n p m F }
+
+def OpTrace.mapOp {α β : Type} (stepCost : ℕ) (f : α → β) : List α → OpTrace (List β)
+  | [] => OpTrace.ret []
+  | x :: xs =>
+      OpTrace.seq (OpTrace.prim stepCost (f x)) (fun y =>
+        OpTrace.seq (OpTrace.mapOp stepCost f xs) (fun ys =>
+          OpTrace.ret (y :: ys)))
+
+
+@[simp]
+theorem OpTrace.mapOp_eval {α β : Type} (stepCost : ℕ) (f : α → β) (xs : List α) :
+    (OpTrace.mapOp stepCost f xs).eval = xs.map f := by
+  induction xs with
+  | nil => rfl
+  | cons x xs ih =>
+    dsimp [OpTrace.mapOp, OpTrace.eval, List.map]
+    rw [ih]
+
+@[simp]
+theorem OpTrace.mapOp_steps {α β : Type} (stepCost : ℕ) (f : α → β) (xs : List α) :
+    (OpTrace.mapOp stepCost f xs).steps = xs.length * stepCost := by
+  induction xs with
+  | nil => simp [OpTrace.mapOp, OpTrace.steps]
+  | cons x xs ih =>
+    dsimp [OpTrace.mapOp, OpTrace.steps, List.length]
+    rw [ih]
+    ring
+
+
+def OpTrace.filterOp {α : Type} (stepCost : ℕ) (p : α → Bool) : List α → OpTrace (List α)
+  | [] => OpTrace.ret []
+  | x :: xs =>
+      OpTrace.seq (OpTrace.prim stepCost (p x)) (fun b =>
+        OpTrace.seq (OpTrace.filterOp stepCost p xs) (fun ys =>
+          OpTrace.ret (if b then x :: ys else ys)))
+
+@[simp]
+theorem OpTrace.filterOp_eval {α : Type} (stepCost : ℕ) (p : α → Bool) (xs : List α) :
+    (OpTrace.filterOp stepCost p xs).eval = xs.filter p := by
+  induction xs with
+  | nil => rfl
+  | cons x xs ih =>
+    dsimp [OpTrace.filterOp, OpTrace.eval, List.filter]
+    rw [ih]
+    cases p x <;> rfl
+
+@[simp]
+theorem OpTrace.filterOp_steps {α : Type} (stepCost : ℕ) (p : α → Bool) (xs : List α) :
+    (OpTrace.filterOp stepCost p xs).steps = xs.length * stepCost := by
+  induction xs with
+  | nil => simp [OpTrace.filterOp, OpTrace.steps]
+  | cons x xs ih =>
+    dsimp [OpTrace.filterOp, OpTrace.steps, List.length]
+    rw [ih]
+    ring
+
+
 
 
 
@@ -751,12 +882,6 @@ noncomputable def recombineCRTVal (n : ℕ) (F : InstanceSATPlus 2) : Option (Fi
     some (h.choose)
   else
     none
-
-
------------------------------------------------------------------------
-
-
-
 
 
 end P_NP_Def

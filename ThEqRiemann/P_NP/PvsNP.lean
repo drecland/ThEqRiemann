@@ -2271,6 +2271,8 @@ noncomputable def computeTraceCert (n p m : ℕ) (F : InstanceSATPlus 2) :
 
 noncomputable def canonicalVerrou1 : Verrou1_PolyTimeTrace where
   computeTrace := fun n p m F => (computeTraceCert n p m F).toCostM
+  prog := fun n p m F => (computeTraceCert n p m F).prog
+  h_link := fun n p m F => (computeTraceCert n p m F).h_link
   poly_bound := Polynomial.X
   cost_le_poly := by
     intro n p m F
@@ -2540,22 +2542,23 @@ open Addons_P_NP
 
 lemma effective_coherent_local
     (n : ℕ) (F : InstanceSATPlus 2) (k : Fin (2 ^ n))
-    (_hk : evalSATPlus 2 n F k = true) (i : Fin n) :
+    (hk : evalSATPlus 2 n F k = true) (i : Fin n) :
     ((k : ℕ) : ZMod (canonicalPrimes n i)) ∈
       (effectiveVerrou2.extractLocalRoots n (canonicalPrimes n i) F
         (fun m => effectiveVerrou1.computeTrace n (canonicalPrimes n i) m F)).val := by
   dsimp [effectiveVerrou2]
-  have hval := (extractRootsOp (canonicalPrimes n i)
+  have hval := (extractRootsOp (canonicalPrimes n i) (inputSizeSATPlus 2 n F)
     (fun m => ((effectiveVerrou1.computeTrace n (canonicalPrimes n i) m F).val))).h_spec
   rw [hval]
   have hprime : Nat.Prime (canonicalPrimes n i) := by
     dsimp [canonicalPrimes]
     exact Nat.nth_mem_of_infinite Nat.infinite_setOfPred_prime i.val
   have _ : Fact (Nat.Prime (canonicalPrimes n i)) := ⟨hprime⟩
-  exact mem_extractLocalRootsEffective
-    (canonicalPrimes n i)
+  rw [mem_extractLocalRootsEffective_iff]
+  exact newtonGirard_horner_annihilates_solution n (canonicalPrimes n i) hprime F
     (fun m => (effectiveVerrou1.computeTrace n (canonicalPrimes n i) m F).val)
-    ((k : ℕ) : ZMod (canonicalPrimes n i))
+    (fun m => effectiveVerrou1.spec n (canonicalPrimes n i) m F)
+    k hk
 
 noncomputable def effectiveExtractor : ModularNewtonCRTExtractor 2 :=
   extractorFromVerrous
